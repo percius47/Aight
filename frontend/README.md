@@ -9,7 +9,13 @@ npm install
 Copy-Item .env.example .env.local
 ```
 
-Set `NEXT_PUBLIC_PRIVY_APP_ID` to a Privy app ID for real wallet login. Without it, the UI shell still builds for local development.
+Set these values in `.env.local`:
+
+```text
+NEXT_PUBLIC_AIGHT_GATEWAY_URL=http://localhost:8787
+NEXT_PUBLIC_AIGHT_REGISTRY_ADDRESS=0x9E67068538294A3E1b1AECAF987a8252e2e4771E
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id
+```
 
 ## Run
 
@@ -17,4 +23,4 @@ Set `NEXT_PUBLIC_PRIVY_APP_ID` to a Privy app ID for real wallet login. Without 
 npm run dev
 ```
 
-The dashboard reads active operators from `NEXT_PUBLIC_AIGHT_GATEWAY_URL`, listens for token telemetry over WebSocket, and falls back to demo data when the gateway is offline.
+The dashboard reads active operators from `NEXT_PUBLIC_AIGHT_GATEWAY_URL`, connects wallets through RainbowKit on Base Sepolia, listens for token telemetry over WebSocket, and falls back to demo data when the gateway is offline.

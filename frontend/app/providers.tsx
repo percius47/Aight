@@ -1,30 +1,32 @@
 "use client";
 
-import { PrivyProvider } from "@privy-io/react-auth";
-import { baseSepolia } from "viem/chains";
+import "@rainbow-me/rainbowkit/styles.css";
 
-import { hasPrivyAppId, privyAppId } from "@/lib/config";
+import { getDefaultConfig, RainbowKitProvider } from "@rainbow-me/rainbowkit";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
+import { baseSepolia } from "viem/chains";
+import { WagmiProvider } from "wagmi";
+
+import { walletConnectProjectId } from "@/lib/config";
+
+const wagmiConfig = getDefaultConfig({
+  appName: "Aight",
+  projectId: walletConnectProjectId || "aight-local",
+  chains: [baseSepolia],
+  ssr: true,
+});
 
 export function Providers({ children }: Readonly<{ children: React.ReactNode }>) {
-  if (!hasPrivyAppId) {
-    return children;
-  }
+  const [queryClient] = useState(() => new QueryClient());
 
   return (
-    <PrivyProvider
-      appId={privyAppId}
-      config={{
-        appearance: {
-          theme: "dark",
-          accentColor: "#00FF9D",
-          logo: undefined,
-        },
-        defaultChain: baseSepolia,
-        supportedChains: [baseSepolia],
-        loginMethods: ["wallet", "email"],
-      }}
-    >
-      {children}
-    </PrivyProvider>
+    <WagmiProvider config={wagmiConfig}>
+      <QueryClientProvider client={queryClient}>
+        <RainbowKitProvider initialChain={baseSepolia} modalSize="compact">
+          {children}
+        </RainbowKitProvider>
+      </QueryClientProvider>
+    </WagmiProvider>
   );
 }
