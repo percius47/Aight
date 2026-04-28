@@ -27,4 +27,5 @@ broadcast/
 artifacts/
 typechain/
 cache_forge/
+contracts/lib/
 MASTER_PRD.md

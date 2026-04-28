@@ -81,9 +81,12 @@ contract AightRegistry is Ownable, ReentrancyGuard {
     error UnauthorizedCaller();
     error TransferFailed();
 
-    constructor(address initialOwner, address initialTreasury, uint256 initialMinOperatorStakeWei, uint256 initialHeartbeatGracePeriod)
-        Ownable(initialOwner)
-    {
+    constructor(
+        address initialOwner,
+        address initialTreasury,
+        uint256 initialMinOperatorStakeWei,
+        uint256 initialHeartbeatGracePeriod
+    ) Ownable(initialOwner) {
         if (initialTreasury == address(0)) {
             revert InvalidAddress();
         }
@@ -147,7 +150,12 @@ contract AightRegistry is Ownable, ReentrancyGuard {
         emit OperatorDeactivated(msg.sender);
     }
 
-    function stakeUserDeposit(address operatorAddress, uint64 durationHours) external payable nonReentrant returns (uint256 escrowId) {
+    function stakeUserDeposit(address operatorAddress, uint64 durationHours)
+        external
+        payable
+        nonReentrant
+        returns (uint256 escrowId)
+    {
         Operator storage operator = operators[operatorAddress];
         if (!operator.active) {
             revert OperatorInactive();
@@ -205,7 +213,9 @@ contract AightRegistry is Ownable, ReentrancyGuard {
         withdrawable[escrow.operator] += operatorAmountWei;
         withdrawable[treasury] += treasuryAmountWei;
 
-        emit HourlyPaymentReleased(escrowId, escrow.operator, operatorAmountWei, treasuryAmountWei, escrow.releasedHours);
+        emit HourlyPaymentReleased(
+            escrowId, escrow.operator, operatorAmountWei, treasuryAmountWei, escrow.releasedHours
+        );
     }
 
     function slashForMissedHeartbeat(uint256 escrowId) external nonReentrant {
