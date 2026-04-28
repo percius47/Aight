@@ -4,7 +4,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from schemas import IssueApiKeyRequest, OperatorStatus, RegisterOperatorRequest
+from schemas import IssueApiKeyRequest, OperatorHeartbeatRequest, OperatorStatus, RegisterOperatorRequest
 
 
 @dataclass(slots=True)
@@ -49,6 +49,13 @@ class GatewayState:
 
     def list_operators(self) -> list[OperatorStatus]:
         return [self.to_status(record) for record in self._operators.values() if record.active]
+
+    def record_heartbeat(self, operator_address: str, payload: OperatorHeartbeatRequest) -> OperatorStatus:
+        record = self.get_operator(operator_address)
+        record.latency_ms = payload.latency_ms
+        record.tokens_per_second = payload.tokens_per_second
+        record.active = payload.active
+        return self.to_status(record)
 
     def issue_api_key(self, payload: IssueApiKeyRequest) -> ApiKeyRecord:
         normalized_operator = payload.operator_address.lower()

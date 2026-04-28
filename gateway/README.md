@@ -17,6 +17,8 @@ Copy-Item .env.example .env
 uvicorn main:app --reload --port 8787
 ```
 
+If `AIGHT_REGISTRY_ADDRESS` is set, every API key request is checked against the on-chain `AightRegistry` escrow and operator state. Leave it blank for local dummy-operator development.
+
 ## Local Dummy Flow
 
 Register the built-in dummy operator:

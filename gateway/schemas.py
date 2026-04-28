@@ -27,6 +27,12 @@ class RegisterOperatorRequest(BaseModel):
     tokens_per_second: float = Field(default=0, ge=0)
 
 
+class OperatorHeartbeatRequest(BaseModel):
+    latency_ms: int = Field(default=0, ge=0)
+    tokens_per_second: float = Field(default=0, ge=0)
+    active: bool = True
+
+
 class OperatorStatus(BaseModel):
     operator_address: str
     tunnel_url: str

@@ -7,10 +7,12 @@ from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketDiscon
 from fastapi.responses import StreamingResponse
 from litellm import acompletion
 
+from contract_client import registry_client
 from schemas import (
     ChatCompletionRequest,
     IssueApiKeyRequest,
     IssueApiKeyResponse,
+    OperatorHeartbeatRequest,
     OperatorStatus,
     RegisterOperatorRequest,
     TelemetryEvent,
@@ -34,6 +36,14 @@ async def register_operator(payload: RegisterOperatorRequest) -> OperatorStatus:
 @router.get("/operators", response_model=list[OperatorStatus])
 async def list_operators() -> list[OperatorStatus]:
     return gateway_state.list_operators()
+
+
+@router.post("/admin/operators/{operator_address}/heartbeat", response_model=OperatorStatus)
+async def record_operator_heartbeat(operator_address: str, payload: OperatorHeartbeatRequest) -> OperatorStatus:
+    try:
+        return gateway_state.record_heartbeat(operator_address, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/admin/api-keys", response_model=IssueApiKeyResponse)
@@ -110,9 +120,13 @@ def extract_api_key(authorization: str | None, x_aight_api_key: str | None) -> s
 
 def validate_key_or_401(api_key: str) -> ApiKeyRecord:
     try:
-        return gateway_state.validate_api_key(api_key)
+        record = gateway_state.validate_api_key(api_key)
+        registry_client.validate_api_key_record(record)
+        return record
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"invalid registry configuration: {exc}") from exc
 
 
 async def stream_litellm_completion(completion_args: dict[str, Any], key_record: ApiKeyRecord) -> AsyncIterator[dict[str, Any]]:
