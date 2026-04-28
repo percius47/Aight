@@ -19,6 +19,7 @@ venv/
 dist/
 out/
 build/
+.next/
 cache/
 broadcast/
 
@@ -26,3 +27,4 @@ broadcast/
 artifacts/
 typechain/
 cache_forge/
+MASTER_PRD.md
