@@ -7,8 +7,8 @@ from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketDiscon
 from fastapi.responses import StreamingResponse
 from litellm import acompletion
 
-from contract_client import registry_client
-from schemas import (
+from .contract_client import registry_client
+from .schemas import (
     ChatCompletionRequest,
     IssueApiKeyRequest,
     IssueApiKeyResponse,
@@ -17,8 +17,8 @@ from schemas import (
     RegisterOperatorRequest,
     TelemetryEvent,
 )
-from state import ApiKeyRecord, gateway_state
-from telemetry import encode_sse, telemetry_hub
+from .state import ApiKeyRecord, gateway_state
+from .telemetry import encode_sse, telemetry_hub
 
 router = APIRouter()
 

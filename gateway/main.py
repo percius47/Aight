@@ -3,9 +3,9 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from dummy_operator import dummy_router
-from router import router
-from settings import settings
+from .dummy_operator import dummy_router
+from .router import router
+from .settings import settings
 
 
 app = FastAPI(title=settings.gateway_name, version="0.1.0")

@@ -6,8 +6,8 @@ from typing import Any
 from web3 import Web3
 from web3.contract import Contract
 
-from settings import settings
-from state import ApiKeyRecord
+from .settings import settings
+from .state import ApiKeyRecord
 
 REGISTRY_ABI: list[dict[str, Any]] = [
     {

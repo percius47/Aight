@@ -9,7 +9,11 @@ class Settings(BaseSettings):
     registry_address: str | None = None
     base_sepolia_rpc_url: str = "https://sepolia.base.org"
 
-    model_config = SettingsConfigDict(env_prefix="AIGHT_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="AIGHT_",
+        env_file=(".env", ".env.local", "gateway/.env", "gateway/.env.local"),
+        extra="ignore",
+    )
 
 
 settings = Settings()

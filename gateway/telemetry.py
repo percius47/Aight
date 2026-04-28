@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import WebSocket
 
-from schemas import TelemetryEvent
+from .schemas import TelemetryEvent
 
 
 class TelemetryHub:

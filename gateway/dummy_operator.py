@@ -8,8 +8,8 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from schemas import ChatCompletionRequest
-from telemetry import encode_sse
+from .schemas import ChatCompletionRequest
+from .telemetry import encode_sse
 
 dummy_router = APIRouter(prefix="/dummy", tags=["dummy-operator"])
 
