@@ -9,12 +9,24 @@ from litellm import acompletion
 
 from .contract_client import registry_client
 from .schemas import (
+    AccountRequest,
+    AccountResponse,
+    AuthSessionResponse,
     ChatCompletionRequest,
+    ClaimRigRequest,
+    ClaimRigResponse,
+    CreatePairingCodeRequest,
+    CreatePairingCodeResponse,
+    DemoEscrowRequest,
+    DemoEscrowResponse,
     IssueApiKeyRequest,
     IssueApiKeyResponse,
+    LoginRequest,
     OperatorHeartbeatRequest,
     OperatorStatus,
     RegisterOperatorRequest,
+    RigHeartbeatRequest,
+    RigStatusResponse,
     TelemetryEvent,
 )
 from .state import ApiKeyRecord, gateway_state
@@ -28,6 +40,38 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.post("/auth/signup", response_model=AuthSessionResponse)
+async def signup(payload: AccountRequest) -> AuthSessionResponse:
+    try:
+        return gateway_state.create_account(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.post("/auth/login", response_model=AuthSessionResponse)
+async def login(payload: LoginRequest) -> AuthSessionResponse:
+    try:
+        return gateway_state.login(payload)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+@router.get("/auth/me", response_model=AccountResponse)
+async def current_account(authorization: Annotated[str | None, Header()] = None) -> AccountResponse:
+    token = extract_bearer_token(authorization)
+    try:
+        return gateway_state.get_account_for_token(token)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+@router.post("/auth/logout")
+async def logout(authorization: Annotated[str | None, Header()] = None) -> dict[str, str]:
+    token = extract_bearer_token(authorization)
+    gateway_state.logout(token)
+    return {"status": "ok"}
+
+
 @router.post("/admin/operators", response_model=OperatorStatus)
 async def register_operator(payload: RegisterOperatorRequest) -> OperatorStatus:
     return gateway_state.register_operator(payload)
@@ -36,6 +80,40 @@ async def register_operator(payload: RegisterOperatorRequest) -> OperatorStatus:
 @router.get("/operators", response_model=list[OperatorStatus])
 async def list_operators() -> list[OperatorStatus]:
     return gateway_state.list_operators()
+
+
+@router.post("/operator/pairing-codes", response_model=CreatePairingCodeResponse)
+async def create_pairing_code(payload: CreatePairingCodeRequest) -> CreatePairingCodeResponse:
+    return gateway_state.create_pairing_code(payload)
+
+
+@router.post("/operator/rigs/claim", response_model=ClaimRigResponse)
+async def claim_rig(payload: ClaimRigRequest) -> ClaimRigResponse:
+    try:
+        return gateway_state.claim_rig(payload)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+@router.get("/operator/rigs", response_model=list[RigStatusResponse])
+async def list_operator_rigs(operator_address: str | None = None) -> list[RigStatusResponse]:
+    return gateway_state.list_rigs(operator_address)
+
+
+@router.post("/operator/rigs/{rig_id}/heartbeat", response_model=RigStatusResponse)
+async def record_rig_heartbeat(
+    rig_id: str,
+    payload: RigHeartbeatRequest,
+    x_aight_rig_token: Annotated[str | None, Header(alias="x-aight-rig-token")] = None,
+) -> RigStatusResponse:
+    if not x_aight_rig_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing rig token")
+    try:
+        return gateway_state.record_rig_heartbeat(rig_id, x_aight_rig_token, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 
 @router.post("/admin/operators/{operator_address}/heartbeat", response_model=OperatorStatus)
@@ -58,6 +136,14 @@ async def issue_api_key(payload: IssueApiKeyRequest) -> IssueApiKeyResponse:
         escrow_id=record.escrow_id,
         operator_address=record.operator_address,
     )
+
+
+@router.post("/buyer/demo-escrows", response_model=DemoEscrowResponse)
+async def create_demo_escrow(payload: DemoEscrowRequest) -> DemoEscrowResponse:
+    try:
+        return gateway_state.create_demo_escrow(payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/v1/chat/completions")
@@ -116,6 +202,12 @@ def extract_api_key(authorization: str | None, x_aight_api_key: str | None) -> s
     if authorization and authorization.lower().startswith("bearer "):
         return authorization[7:].strip()
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing AIGHT_API_KEY")
+
+
+def extract_bearer_token(authorization: str | None) -> str:
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing account session")
 
 
 def validate_key_or_401(api_key: str) -> ApiKeyRecord:
