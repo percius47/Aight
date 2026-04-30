@@ -6,8 +6,8 @@ import json
 import os
 import platform
 import shutil
-import subprocess
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +16,7 @@ import httpx
 
 CONFIG_DIR = Path.home() / ".aight"
 RIG_CONFIG_PATH = CONFIG_DIR / "rig.json"
+DEVICE_CONFIG_PATH = CONFIG_DIR / "rig-device.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,8 @@ class BootstrapConfig:
 @dataclass(frozen=True, slots=True)
 class RigCredentials:
     rig_id: str
+    rig_identity: str
+    ens_name: str
     rig_token: str
     operator_address: str
 
@@ -43,19 +46,25 @@ class RigCredentials:
 async def main() -> None:
     config = parse_args()
     hardware_summary = collect_hardware_summary()
+    device_fingerprint = get_device_fingerprint(config.model, hardware_summary)
     limits = {"gpu_limit": config.gpu_limit}
 
     if config.dry_run:
-        print(json.dumps({"hardware": hardware_summary, "limits": limits, "model": config.model}, indent=2))
+        print(
+            json.dumps(
+                {"device_fingerprint": device_fingerprint, "hardware": hardware_summary, "limits": limits, "model": config.model},
+                indent=2,
+            )
+        )
         return
 
     await ensure_ollama_ready(config.ollama_url)
     if config.pull_model:
         await ensure_model_installed(config.model)
 
-    credentials = await claim_rig(config, hardware_summary, limits)
+    credentials = await claim_rig(config, hardware_summary, limits, device_fingerprint)
     save_rig_credentials(credentials)
-    print(f"Rig paired as {credentials.rig_id} for operator {credentials.operator_address}")
+    print(f"Rig paired as {credentials.ens_name} for operator {credentials.operator_address}")
 
     await heartbeat_loop(config, credentials, hardware_summary, limits)
 
@@ -107,8 +116,9 @@ async def ensure_ollama_ready(ollama_url: str) -> None:
             response = await client.get(f"{ollama_url}/api/tags")
             response.raise_for_status()
     except httpx.HTTPError as exc:
+        install_hint = "Install Ollama from https://ollama.com/download, then run: ollama serve"
         raise RuntimeError(
-            "Ollama is not reachable. Install/start Ollama first: https://ollama.com/download"
+            f"Ollama is not reachable at {ollama_url}. {install_hint}"
         ) from exc
 
 
@@ -132,31 +142,79 @@ async def ensure_model_installed(model: str) -> None:
         raise RuntimeError(f"`ollama pull {model}` failed with exit code {exit_code}")
 
 
-async def claim_rig(config: BootstrapConfig, hardware_summary: dict[str, Any], limits: dict[str, Any]) -> RigCredentials:
+async def claim_rig(
+    config: BootstrapConfig,
+    hardware_summary: dict[str, Any],
+    limits: dict[str, Any],
+    device_fingerprint: str,
+) -> RigCredentials:
     payload = {
         "pairing_code": config.pairing_code,
         "rig_name": config.rig_name,
         "model": config.model,
         "tunnel_url": config.tunnel_url,
         "hourly_rate_wei": config.hourly_rate_wei,
+        "device_fingerprint": device_fingerprint,
         "hardware_summary": hardware_summary,
         "limits": limits,
     }
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.post(f"{config.gateway_url}/operator/rigs/claim", json=payload)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise RuntimeError(format_gateway_error(response))
         body = response.json()
 
     return RigCredentials(
         rig_id=body["rig_id"],
+        rig_identity=body["rig_identity"],
+        ens_name=body["ens_name"],
         rig_token=body["rig_token"],
         operator_address=body["operator_address"],
     )
 
 
+def format_gateway_error(response: httpx.Response) -> str:
+    detail = response.text
+    try:
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("detail"):
+            detail = str(payload["detail"])
+    except ValueError:
+        pass
+
+    if response.status_code == 401 and "already has a live paired rig" in detail:
+        return (
+            "Pairing rejected: this machine is already paired and live for this operator. "
+            "Halt the existing rig in the Operator Console before pairing this machine again."
+        )
+
+    if response.status_code == 401 and "invalid or expired pairing code" in detail:
+        return "Pairing rejected: the pairing code is invalid, expired, or already used. Generate a fresh code in the Operator Console."
+
+    return f"Gateway rejected rig pairing ({response.status_code}): {detail}"
+
+
 def save_rig_credentials(credentials: RigCredentials) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     RIG_CONFIG_PATH.write_text(json.dumps(asdict(credentials), indent=2), encoding="utf-8")
+
+
+def get_device_fingerprint(model: str, hardware_summary: dict[str, Any]) -> str:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if DEVICE_CONFIG_PATH.exists():
+        device_config = json.loads(DEVICE_CONFIG_PATH.read_text(encoding="utf-8"))
+    else:
+        device_config = {"install_id": str(uuid.uuid4())}
+        DEVICE_CONFIG_PATH.write_text(json.dumps(device_config, indent=2), encoding="utf-8")
+
+    fingerprint_source = {
+        "install_id": device_config["install_id"],
+        "hostname": hardware_summary.get("hostname"),
+        "machine": hardware_summary.get("machine"),
+        "cpu_count": hardware_summary.get("cpu_count"),
+        "model": model,
+    }
+    return uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(fingerprint_source, sort_keys=True)).hex
 
 
 async def heartbeat_loop(

@@ -12,6 +12,7 @@ from .schemas import (
     AccountRequest,
     AccountResponse,
     AuthSessionResponse,
+    BuyerRentalResponse,
     ChatCompletionRequest,
     ClaimRigRequest,
     ClaimRigResponse,
@@ -19,6 +20,8 @@ from .schemas import (
     CreatePairingCodeResponse,
     DemoEscrowRequest,
     DemoEscrowResponse,
+    DeleteRigRequest,
+    HaltRigRequest,
     IssueApiKeyRequest,
     IssueApiKeyResponse,
     LoginRequest,
@@ -100,6 +103,27 @@ async def list_operator_rigs(operator_address: str | None = None) -> list[RigSta
     return gateway_state.list_rigs(operator_address)
 
 
+@router.post("/operator/rigs/{rig_id}/halt", response_model=RigStatusResponse)
+async def halt_operator_rig(rig_id: str, payload: HaltRigRequest) -> RigStatusResponse:
+    try:
+        return gateway_state.halt_rig(rig_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+@router.delete("/operator/rigs/{rig_id}")
+async def delete_operator_rig(rig_id: str, payload: DeleteRigRequest) -> dict[str, str]:
+    try:
+        gateway_state.delete_rig(rig_id, payload)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 @router.post("/operator/rigs/{rig_id}/heartbeat", response_model=RigStatusResponse)
 async def record_rig_heartbeat(
     rig_id: str,
@@ -125,9 +149,20 @@ async def record_operator_heartbeat(operator_address: str, payload: OperatorHear
 
 
 @router.post("/admin/api-keys", response_model=IssueApiKeyResponse)
-async def issue_api_key(payload: IssueApiKeyRequest) -> IssueApiKeyResponse:
+async def issue_api_key(
+    payload: IssueApiKeyRequest,
+    authorization: Annotated[str | None, Header()] = None,
+) -> IssueApiKeyResponse:
+    buyer_username = None
+    if authorization:
+        token = extract_bearer_token(authorization)
+        try:
+            buyer_username = gateway_state.get_account_for_token(token).username
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
     try:
-        record = gateway_state.issue_api_key(payload)
+        record = gateway_state.issue_api_key(payload, buyer_username=buyer_username)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -136,6 +171,23 @@ async def issue_api_key(payload: IssueApiKeyRequest) -> IssueApiKeyResponse:
         escrow_id=record.escrow_id,
         operator_address=record.operator_address,
     )
+
+
+@router.get("/buyer/rentals", response_model=list[BuyerRentalResponse])
+async def list_buyer_rentals(
+    buyer_address: str | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> list[BuyerRentalResponse]:
+    buyer_username = None
+    if authorization:
+        token = extract_bearer_token(authorization)
+        try:
+            buyer_username = gateway_state.get_account_for_token(token).username
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    if buyer_username is None and buyer_address is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing buyer session or address")
+    return gateway_state.list_buyer_rentals(buyer_username=buyer_username, buyer_address=buyer_address)
 
 
 @router.post("/buyer/demo-escrows", response_model=DemoEscrowResponse)

@@ -74,6 +74,8 @@ class AuthSessionResponse(BaseModel):
 class CreatePairingCodeRequest(BaseModel):
     operator_address: str
     rig_name: str = Field(default="Aight Rig", min_length=1, max_length=80)
+    model: str = "gemma3:1b"
+    hourly_rate_wei: int = Field(default=1000, gt=0)
     ttl_minutes: int = Field(default=10, ge=1, le=60)
 
 
@@ -81,6 +83,8 @@ class CreatePairingCodeResponse(BaseModel):
     pairing_code: str
     operator_address: str
     rig_name: str
+    model: str
+    hourly_rate_wei: int
     expires_at: datetime
 
 
@@ -90,12 +94,15 @@ class ClaimRigRequest(BaseModel):
     model: str
     tunnel_url: str | None = None
     hourly_rate_wei: int = Field(gt=0)
+    device_fingerprint: str = Field(min_length=12, max_length=128)
     hardware_summary: dict[str, Any] = Field(default_factory=dict)
     limits: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClaimRigResponse(BaseModel):
     rig_id: str
+    rig_identity: str
+    ens_name: str
     rig_token: str
     operator_address: str
 
@@ -114,6 +121,8 @@ class RigHeartbeatRequest(BaseModel):
 
 class RigStatusResponse(BaseModel):
     rig_id: str
+    rig_identity: str
+    ens_name: str
     operator_address: str
     rig_name: str
     status: RigStatus
@@ -125,15 +134,28 @@ class RigStatusResponse(BaseModel):
     current_load: float
     hardware_summary: dict[str, Any]
     limits: dict[str, Any]
+    assignment: dict[str, Any] | None
+    expected_earnings_wei: int
+    device_fingerprint: str
     error_message: str | None
     created_at: datetime
     last_heartbeat_at: datetime
+    halted_at: datetime | None
+
+
+class HaltRigRequest(BaseModel):
+    operator_address: str
+
+
+class DeleteRigRequest(BaseModel):
+    operator_address: str
 
 
 class IssueApiKeyRequest(BaseModel):
     escrow_id: int = Field(gt=0)
     user_address: str
     operator_address: str
+    rig_id: str | None = None
     duration_hours: int = Field(gt=0)
 
 
@@ -143,9 +165,34 @@ class IssueApiKeyResponse(BaseModel):
     operator_address: str
 
 
+class BuyerRentalResponse(BaseModel):
+    rental_id: str
+    buyer_username: str | None
+    buyer_address: str
+    api_key: str
+    escrow_id: int
+    operator_address: str
+    rig_id: str | None
+    rig_identity: str
+    rig_name: str
+    model: str
+    duration_hours: int
+    amount_wei: int
+    status: Literal["allocated", "terminated", "expired"]
+    created_at: datetime
+    expires_at: datetime
+    terminated_at: datetime | None
+    termination_reason: str | None
+    used_hours: int
+    refund_wei: int
+    operator_payout_wei: int
+    slash_wei: int
+
+
 class DemoEscrowRequest(BaseModel):
     buyer_address: str
     operator_address: str
+    rig_id: str | None = None
     duration_hours: int = Field(default=1, gt=0)
 
 
@@ -153,6 +200,8 @@ class DemoEscrowResponse(BaseModel):
     escrow_id: int
     buyer_address: str
     operator_address: str
+    rig_id: str | None
+    rig_identity: str | None
     duration_hours: int
     amount_wei: int
 
