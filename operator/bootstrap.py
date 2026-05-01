@@ -215,6 +215,8 @@ async def start_cloudflare_tunnel(config: BootstrapConfig) -> tuple[str, asyncio
         "tunnel",
         "--url",
         config.ollama_url,
+        "--http-host-header",
+        "localhost:11434",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
