@@ -83,6 +83,7 @@ export type RentedRig = {
   operatorPayoutWei: number;
   refundWei: number;
   rentedAt: string;
+  rentalId: string;
   rigId: string | null;
   rigIdentity: string;
   rigName: string;

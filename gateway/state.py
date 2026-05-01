@@ -31,6 +31,7 @@ from .schemas import (
     RigStatus,
     RigStatusResponse,
 )
+from .settings import settings
 
 
 @dataclass(slots=True)
@@ -144,7 +145,11 @@ class GatewayState:
         self._sessions: dict[str, SessionRecord] = {}
         self._rentals: dict[str, RentalRecord] = {}
         self._next_demo_escrow_id = 1
-        self._state_path = Path(__file__).resolve().parent / ".data" / "gateway-state.json"
+        self._state_path = (
+            Path(settings.configured_state_path)
+            if settings.configured_state_path
+            else Path(__file__).resolve().parent / ".data" / "gateway-state.json"
+        )
         self._load()
 
     def register_operator(self, payload: RegisterOperatorRequest) -> OperatorStatus:
@@ -521,6 +526,32 @@ class GatewayState:
         ]
         rentals.sort(key=lambda record: record.created_at, reverse=True)
         return [self.to_rental_response(record) for record in rentals]
+
+    def delete_buyer_rental(
+        self,
+        rental_id: str,
+        *,
+        buyer_username: str | None = None,
+        buyer_address: str | None = None,
+    ) -> None:
+        rental = self._rentals.get(rental_id)
+        if rental is None:
+            raise KeyError("rental not found")
+
+        normalized_address = buyer_address.lower() if buyer_address else None
+        owns_rental = (
+            (buyer_username is not None and rental.buyer_username == buyer_username)
+            or (normalized_address is not None and rental.buyer_address == normalized_address)
+        )
+        if not owns_rental:
+            raise PermissionError("buyer does not own this rental")
+
+        is_expired = rental.expires_at <= datetime.now(UTC)
+        if rental.status == "allocated" and not is_expired:
+            raise PermissionError("active allocated rentals cannot be deleted")
+
+        del self._rentals[rental_id]
+        self._persist()
 
     def _rental_for_api_key(self, api_key: str) -> RentalRecord | None:
         return next((record for record in self._rentals.values() if record.api_key == api_key), None)

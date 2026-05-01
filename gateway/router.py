@@ -190,6 +190,34 @@ async def list_buyer_rentals(
     return gateway_state.list_buyer_rentals(buyer_username=buyer_username, buyer_address=buyer_address)
 
 
+@router.delete("/buyer/rentals/{rental_id}")
+async def delete_buyer_rental(
+    rental_id: str,
+    buyer_address: str | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, str]:
+    buyer_username = None
+    if authorization:
+        token = extract_bearer_token(authorization)
+        try:
+            buyer_username = gateway_state.get_account_for_token(token).username
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    if buyer_username is None and buyer_address is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing buyer session or address")
+    try:
+        gateway_state.delete_buyer_rental(
+            rental_id,
+            buyer_username=buyer_username,
+            buyer_address=buyer_address,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return {"status": "deleted"}
+
+
 @router.post("/buyer/demo-escrows", response_model=DemoEscrowResponse)
 async def create_demo_escrow(payload: DemoEscrowRequest) -> DemoEscrowResponse:
     try:

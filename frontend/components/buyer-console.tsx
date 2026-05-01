@@ -2,6 +2,7 @@
 
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { parseEventLogs } from "viem";
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAccount, useChainId, usePublicClient, useWriteContract } from "wagmi";
 
@@ -34,6 +35,7 @@ const registryAbi = [
 ] as const;
 
 const baseSepoliaChainId = 84532;
+type PurchaseMode = "demo" | "onchain";
 
 export function BuyerConsole() {
   const { address } = useAccount();
@@ -50,7 +52,9 @@ export function BuyerConsole() {
   const [searchQuery, setSearchQuery] = useState("");
   const [agentResponse, setAgentResponse] = useState("");
   const [busy, setBusy] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingPurchaseMode, setPendingPurchaseMode] = useState<PurchaseMode | null>(null);
 
   const buyerAddress = address ?? normalizeAddress(demoWalletAddress);
   const isBaseSepolia = chainId === baseSepoliaChainId;
@@ -217,6 +221,50 @@ export function BuyerConsole() {
     }
   }
 
+  async function confirmPurchase(): Promise<void> {
+    const mode = pendingPurchaseMode;
+    setPendingPurchaseMode(null);
+    if (mode === "demo") {
+      await createDemoEscrowAndKey();
+      return;
+    }
+    if (mode === "onchain") {
+      await createOnChainEscrowAndKey();
+    }
+  }
+
+  async function deleteRental(rental: RentedRig): Promise<void> {
+    if (!token && !buyerAddress) {
+      setError("Connect a buyer wallet or login first.");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const query = buyerAddress ? `?buyer_address=${encodeURIComponent(buyerAddress)}` : "";
+      const headers = token ? { authorization: `Bearer ${token}` } : undefined;
+      const response = await fetch(`${gatewayUrl}/buyer/rentals/${rental.rentalId}${query}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      await loadRentals();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Could not delete rental.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyKey(key: string): Promise<void> {
+    await navigator.clipboard.writeText(key);
+    setCopiedKey(key);
+    window.setTimeout(() => setCopiedKey((currentKey) => (currentKey === key ? null : currentKey)), 1600);
+  }
+
   async function testApiKey(): Promise<void> {
     if (!apiKey) {
       return;
@@ -303,21 +351,33 @@ export function BuyerConsole() {
             </div>
 
             <div className="mt-5 flex flex-wrap gap-3">
-              <button className="rounded-2xl bg-cyan-300 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400" disabled={busy || !walletReady} onClick={() => void createDemoEscrowAndKey()} type="button">
+              <button className="rounded-2xl bg-cyan-300 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400" disabled={busy || !walletReady} onClick={() => setPendingPurchaseMode("demo")} type="button">
                 Demo stake + key
               </button>
-              <button className="rounded-2xl border border-cyan-300/40 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-cyan-200 disabled:border-zinc-700 disabled:text-zinc-600" disabled={busy || !address} onClick={() => void createOnChainEscrowAndKey()} type="button">
+              <button className="rounded-2xl border border-cyan-300/40 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-cyan-200 disabled:border-zinc-700 disabled:text-zinc-600" disabled={busy || !address} onClick={() => setPendingPurchaseMode("onchain")} type="button">
                 Base Sepolia stake + key
-              </button>
-              <button className="rounded-2xl border border-[#00FF9D]/40 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-[#00FF9D] disabled:border-zinc-700 disabled:text-zinc-600" disabled={busy || !apiKey} onClick={() => void testApiKey()} type="button">
-                Test agent call
               </button>
             </div>
 
             {apiKey ? (
               <div className="mt-5 rounded-3xl border border-[#00FF9D]/20 bg-black/50 p-4">
                 <p className="text-xs uppercase tracking-[0.3em] text-[#00FF9D]">AIGHT API key</p>
-                <p className="mt-3 break-all font-mono text-sm text-zinc-100">{apiKey.api_key}</p>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <p className="min-w-0 flex-1 break-all rounded-2xl border border-[#00FF9D]/20 bg-[#00FF9D]/5 p-3 font-mono text-sm text-zinc-100">
+                    {apiKey.api_key}
+                  </p>
+                  <IconButton
+                    active={copiedKey === apiKey.api_key}
+                    label={copiedKey === apiKey.api_key ? "API key copied" : "Copy API key"}
+                    onClick={() => void copyKey(apiKey.api_key)}
+                    tone="copy"
+                  >
+                    <CopyIcon />
+                  </IconButton>
+                  <button className="rounded-2xl border border-[#00FF9D]/40 px-4 py-3 font-mono text-xs font-bold uppercase tracking-[0.14em] text-[#00FF9D] disabled:border-zinc-700 disabled:text-zinc-600" disabled={busy} onClick={() => void testApiKey()} type="button">
+                    Test agent call
+                  </button>
+                </div>
               </div>
             ) : null}
 
@@ -332,7 +392,25 @@ export function BuyerConsole() {
         </div>
       ) : null}
 
-      <RentedRigsSection rentals={rentedRigs} />
+      {selectedRig && pendingPurchaseMode ? (
+        <PurchaseConfirmModal
+          amountWei={amountWei}
+          busy={busy}
+          durationHours={durationHours}
+          mode={pendingPurchaseMode}
+          onCancel={() => setPendingPurchaseMode(null)}
+          onConfirm={() => void confirmPurchase()}
+          rig={selectedRig}
+        />
+      ) : null}
+
+      <RentedRigsSection
+        copiedKey={copiedKey}
+        busy={busy}
+        onCopy={(key) => void copyKey(key)}
+        onDelete={(rental) => void deleteRental(rental)}
+        rentals={rentedRigs}
+      />
     </div>
   );
 }
@@ -472,14 +550,74 @@ function RigMarketCard({ onSelect, rig, selected }: Readonly<{ onSelect: () => v
   );
 }
 
-function RentedRigsSection({ rentals }: Readonly<{ rentals: RentedRig[] }>) {
+function PurchaseConfirmModal({
+  amountWei,
+  busy,
+  durationHours,
+  mode,
+  onCancel,
+  onConfirm,
+  rig,
+}: Readonly<{
+  amountWei: number;
+  busy: boolean;
+  durationHours: number;
+  mode: PurchaseMode;
+  onCancel: () => void;
+  onConfirm: () => void;
+  rig: OperatorRig;
+}>) {
+  return (
+    <div className="fixed inset-0 z-60 grid place-items-center bg-black/80 px-4 backdrop-blur">
+      <section className="w-full max-w-2xl rounded-4xl border border-cyan-300/30 bg-zinc-950 p-5 shadow-[0_0_80px_rgba(0,120,255,0.22)]">
+        <p className="text-xs uppercase tracking-[0.35em] text-cyan-300">Confirm purchase</p>
+        <h2 className="mt-2 text-2xl font-semibold text-white">Purchase LLM inference</h2>
+        <p className="mt-3 text-sm leading-6 text-zinc-400">
+          You are purchasing inference on this rig for {durationHours} hour{durationHours === 1 ? "" : "s"}.
+          Once confirmed, the stake/key generation action cannot be reversed from this demo flow.
+        </p>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <Metric label="Rig" value={rig.rig_name} />
+          <Metric label="Model" value={rig.model} />
+          <Metric label="Rig ID" value={rig.rig_identity} />
+          <Metric label="Escrow amount" value={`${amountWei} wei`} />
+        </div>
+
+        <div className="mt-5 rounded-2xl border border-amber-300/20 bg-amber-300/5 p-4 text-sm leading-6 text-amber-100">
+          Confirm that you understand this will allocate the selected rig and generate an API key for this rental.
+        </div>
+
+        <div className="mt-5 flex flex-wrap justify-end gap-3">
+          <button className="rounded-2xl border border-zinc-700 px-5 py-3 text-sm text-zinc-300" disabled={busy} onClick={onCancel} type="button">
+            Cancel
+          </button>
+          <button className="rounded-2xl bg-cyan-300 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400" disabled={busy} onClick={onConfirm} type="button">
+            {busy ? "Working..." : mode === "demo" ? "Confirm demo stake" : "Confirm on-chain stake"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function RentedRigsSection({
+  busy,
+  copiedKey,
+  onCopy,
+  onDelete,
+  rentals,
+}: Readonly<{
+  busy: boolean;
+  copiedKey: string | null;
+  onCopy: (key: string) => void;
+  onDelete: (rental: RentedRig) => void;
+  rentals: RentedRig[];
+}>) {
   return (
     <section className="rounded-4xl border border-zinc-800 bg-zinc-950/75 p-5">
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">Rented rigs</p>
-          <h2 className="mt-2 text-2xl font-semibold text-white">Generated inference keys</h2>
-        </div>
+        <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">Your rentals</p>
         <span className="rounded-full border border-cyan-300/30 px-3 py-1 text-xs text-cyan-200">
           {rentals.filter((rental) => rental.status === "allocated").length} allocated
         </span>
@@ -488,7 +626,19 @@ function RentedRigsSection({ rentals }: Readonly<{ rentals: RentedRig[] }>) {
         {rentals.length > 0 ? (
           rentals.map((rental) => (
             <article className="rounded-3xl border border-zinc-800 bg-black/50 p-4" key={`${rental.escrowId}-${rental.apiKey}`}>
-              <p className="text-sm font-semibold text-white">{rental.rigName}</p>
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-sm font-semibold text-white">{rental.rigName}</p>
+                {rental.status !== "allocated" ? (
+                  <IconButton
+                    disabled={busy}
+                    label="Delete inactive rental"
+                    onClick={() => onDelete(rental)}
+                    tone="delete"
+                  >
+                    <TrashIcon />
+                  </IconButton>
+                ) : null}
+              </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <p className="break-all font-mono text-xs text-zinc-500">{rental.rigIdentity}</p>
                 <span className={`rounded-full border px-3 py-1 text-xs uppercase tracking-[0.16em] ${rentalStatusStyle(rental.status)}`}>
@@ -513,13 +663,23 @@ function RentedRigsSection({ rentals }: Readonly<{ rentals: RentedRig[] }>) {
                   Terminated because: {rental.terminationReason}
                 </p>
               ) : null}
-              <p className={`mt-4 break-all rounded-2xl border p-3 font-mono text-xs ${
-                rental.status === "allocated"
-                  ? "border-[#00FF9D]/20 bg-[#00FF9D]/5 text-[#00FF9D]"
-                  : "border-zinc-700 bg-zinc-900/60 text-zinc-500"
-              }`}>
-                {rental.apiKey}
-              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <p className={`min-w-0 flex-1 break-all rounded-2xl border p-3 font-mono text-xs ${
+                  rental.status === "allocated"
+                    ? "border-[#00FF9D]/20 bg-[#00FF9D]/5 text-[#00FF9D]"
+                    : "border-zinc-700 bg-zinc-900/60 text-zinc-500"
+                }`}>
+                  {rental.apiKey}
+                </p>
+                <IconButton
+                  active={copiedKey === rental.apiKey}
+                  label={copiedKey === rental.apiKey ? "API key copied" : "Copy API key"}
+                  onClick={() => onCopy(rental.apiKey)}
+                  tone="copy"
+                >
+                  <CopyIcon />
+                </IconButton>
+              </div>
               {rental.status !== "allocated" ? (
                 <p className="mt-2 text-xs text-zinc-500">This key is invalid and will not route inference.</p>
               ) : null}
@@ -541,6 +701,62 @@ function Metric({ label, value }: Readonly<{ label: string; value: string }>) {
       <p className="text-[0.65rem] uppercase tracking-[0.25em] text-zinc-600">{label}</p>
       <p className="mt-2 break-all text-sm font-semibold text-zinc-100">{value}</p>
     </div>
+  );
+}
+
+function IconButton({
+  active = false,
+  children,
+  disabled = false,
+  label,
+  onClick,
+  tone,
+}: Readonly<{
+  active?: boolean;
+  children: ReactNode;
+  disabled?: boolean;
+  label: string;
+  onClick: () => void;
+  tone: "copy" | "delete";
+}>) {
+  const toneClass =
+    tone === "delete"
+      ? "text-zinc-400 hover:border-red-300/50 hover:text-red-200"
+      : active
+        ? "border-[#00FF9D]/50 text-[#00FF9D]"
+        : "text-zinc-300 hover:border-[#00FF9D]/50 hover:text-[#00FF9D]";
+
+  return (
+    <button
+      aria-label={label}
+      className={`grid size-11 place-items-center rounded-2xl border border-zinc-700 bg-black/30 transition disabled:cursor-not-allowed disabled:opacity-50 ${toneClass}`}
+      disabled={disabled}
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      {children}
+    </button>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path d="M8 8V5.8C8 4.8 8.8 4 9.8 4h8.4c1 0 1.8.8 1.8 1.8v8.4c0 1-.8 1.8-1.8 1.8H16" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+      <path d="M4 9.8C4 8.8 4.8 8 5.8 8h8.4c1 0 1.8.8 1.8 1.8v8.4c0 1-.8 1.8-1.8 1.8H5.8c-1 0-1.8-.8-1.8-1.8V9.8Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24">
+      <path d="M5 7h14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+      <path d="M9 7V5.8C9 4.8 9.8 4 10.8 4h2.4c1 0 1.8.8 1.8 1.8V7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+      <path d="M7 7l.8 12.2c.1 1 1 1.8 2 1.8h4.4c1 0 1.9-.8 2-1.8L17 7" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.8" />
+      <path d="M10.5 11v5M13.5 11v5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+    </svg>
   );
 }
 
@@ -580,6 +796,7 @@ function toRentedRig(payload: BuyerRentalResponse): RentedRig {
     operatorAddress: payload.operator_address,
     operatorPayoutWei: payload.operator_payout_wei,
     refundWei: payload.refund_wei,
+    rentalId: payload.rental_id,
     rentedAt: payload.created_at,
     rigId: payload.rig_id,
     rigIdentity: payload.rig_identity,

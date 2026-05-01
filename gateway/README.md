@@ -14,10 +14,40 @@ Copy-Item .env.example .env
 ## Run
 
 ```powershell
-uvicorn main:app --reload --port 8787
+uvicorn gateway.main:app --reload --port 8787
 ```
 
 If `AIGHT_REGISTRY_ADDRESS` is set, every API key request is checked against the on-chain `AightRegistry` escrow and operator state. Leave it blank for local dummy-operator development.
+
+## Production Docker
+
+Build from the repository root so the `gateway` package is copied correctly:
+
+```bash
+docker build -t aight-gateway -f gateway/Dockerfile .
+```
+
+Run with a persistent data mount for account, rig, rental, and API-key state:
+
+```bash
+docker run -d \
+  --name aight-gateway \
+  --restart unless-stopped \
+  --env-file gateway/.env.production \
+  -v /opt/aight/data:/data \
+  -p 127.0.0.1:8787:8787 \
+  aight-gateway
+```
+
+Production variables:
+
+```text
+AIGHT_GATEWAY_ENV=production
+AIGHT_REGISTRY_ADDRESS=<Base Sepolia registry address>
+AIGHT_BASE_SEPOLIA_RPC_URL=<Base Sepolia RPC URL>
+AIGHT_ALLOWED_ORIGINS=https://your-vercel-app.vercel.app,https://your-custom-domain.com
+AIGHT_STATE_PATH=/data/gateway-state.json
+```
 
 ## Local Dummy Flow
 
