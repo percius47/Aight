@@ -3,7 +3,7 @@ set -euo pipefail
 
 PAIR="${AIGHT_PAIRING_CODE:-${1:-}}"
 MODEL="${AIGHT_MODEL:-llama3}"
-GATEWAY_URL="${AIGHT_GATEWAY_URL:-http://localhost:8787}"
+GATEWAY_URL="${AIGHT_GATEWAY_URL:-https://aight.sbs}"
 GPU_LIMIT="${AIGHT_GPU_LIMIT:-auto}"
 INSTALL_ROOT="${HOME}/.aight/operator"
 REPO_URL="https://github.com/percius47/Aight.git"

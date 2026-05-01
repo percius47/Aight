@@ -72,7 +72,7 @@ async def main() -> None:
 def parse_args() -> BootstrapConfig:
     parser = argparse.ArgumentParser(description="Bootstrap an Aight operator rig.")
     parser.add_argument("--pair", required=True, help="Short pairing code from the Aight Operator Console.")
-    parser.add_argument("--gateway-url", default=os.getenv("AIGHT_GATEWAY_URL", "http://localhost:8787"))
+    parser.add_argument("--gateway-url", default=os.getenv("AIGHT_GATEWAY_URL", "https://aight.sbs"))
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
     parser.add_argument("--model", default=os.getenv("AIGHT_MODEL", "llama3"))
     parser.add_argument("--hourly-rate-wei", type=int, default=int(os.getenv("AIGHT_HOURLY_RATE_WEI", "1000")))

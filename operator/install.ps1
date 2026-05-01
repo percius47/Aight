@@ -1,7 +1,7 @@
 param(
     [string]$Pair,
     [string]$Model = "llama3",
-    [string]$GatewayUrl = "http://localhost:8787",
+    [string]$GatewayUrl = "https://aight.sbs",
     [string]$GpuLimit = "auto"
 )
 
