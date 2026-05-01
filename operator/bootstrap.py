@@ -5,10 +5,11 @@ import asyncio
 import json
 import os
 import platform
+import re
 import shutil
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ import httpx
 CONFIG_DIR = Path.home() / ".aight"
 RIG_CONFIG_PATH = CONFIG_DIR / "rig.json"
 DEVICE_CONFIG_PATH = CONFIG_DIR / "rig-device.json"
+DEFAULT_GATEWAY_URL = "https://aight.sbs"
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +32,9 @@ class BootstrapConfig:
     gpu_limit: str
     heartbeat_interval: int
     tunnel_url: str | None
+    tunnel_mode: str
+    cloudflared_bin: str
+    ollama_bin: str
     pull_model: bool
     dry_run: bool
 
@@ -60,19 +65,33 @@ async def main() -> None:
 
     await ensure_ollama_ready(config.ollama_url)
     if config.pull_model:
-        await ensure_model_installed(config.model)
+        await ensure_model_installed(config.model, config.ollama_bin)
+    await ensure_model_runs(config.ollama_url, config.model)
 
-    credentials = await claim_rig(config, hardware_summary, limits, device_fingerprint)
-    save_rig_credentials(credentials)
-    print(f"Rig paired as {credentials.ens_name} for operator {credentials.operator_address}")
+    cloudflare_tunnel: asyncio.subprocess.Process | None = None
+    try:
+        if config.tunnel_mode == "cloudflare" and not config.tunnel_url:
+            tunnel_url, cloudflare_tunnel = await start_cloudflare_tunnel(config)
+            config = replace(config, tunnel_url=tunnel_url)
 
-    await heartbeat_loop(config, credentials, hardware_summary, limits)
+        credentials = await claim_rig(config, hardware_summary, limits, device_fingerprint)
+        save_rig_credentials(credentials)
+        print(f"Rig paired as {credentials.ens_name} for operator {credentials.operator_address}")
+
+        await heartbeat_loop(config, credentials, hardware_summary, limits)
+    finally:
+        if cloudflare_tunnel is not None and cloudflare_tunnel.returncode is None:
+            cloudflare_tunnel.terminate()
+            try:
+                await asyncio.wait_for(cloudflare_tunnel.wait(), timeout=5)
+            except TimeoutError:
+                cloudflare_tunnel.kill()
 
 
 def parse_args() -> BootstrapConfig:
     parser = argparse.ArgumentParser(description="Bootstrap an Aight operator rig.")
     parser.add_argument("--pair", required=True, help="Short pairing code from the Aight Operator Console.")
-    parser.add_argument("--gateway-url", default=os.getenv("AIGHT_GATEWAY_URL", "https://aight.sbs"))
+    parser.add_argument("--gateway-url", default=os.getenv("AIGHT_GATEWAY_URL", DEFAULT_GATEWAY_URL))
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
     parser.add_argument("--model", default=os.getenv("AIGHT_MODEL", "llama3"))
     parser.add_argument("--hourly-rate-wei", type=int, default=int(os.getenv("AIGHT_HOURLY_RATE_WEI", "1000")))
@@ -80,6 +99,14 @@ def parse_args() -> BootstrapConfig:
     parser.add_argument("--gpu-limit", default="auto")
     parser.add_argument("--heartbeat-interval", type=int, default=20)
     parser.add_argument("--tunnel-url", default=None)
+    parser.add_argument(
+        "--tunnel-mode",
+        choices=("local", "cloudflare"),
+        default=os.getenv("AIGHT_TUNNEL_MODE", "cloudflare"),
+        help="Use `cloudflare` to create a Cloudflare Quick Tunnel for local Ollama.",
+    )
+    parser.add_argument("--cloudflared-bin", default=os.getenv("AIGHT_CLOUDFLARED_BIN", "cloudflared"))
+    parser.add_argument("--ollama-bin", default=os.getenv("AIGHT_OLLAMA_BIN", "ollama"))
     parser.add_argument("--no-pull", action="store_true", help="Skip `ollama pull`; fail later if model is unavailable.")
     parser.add_argument("--dry-run", action="store_true", help="Print detected rig configuration without claiming a code.")
     args = parser.parse_args()
@@ -93,7 +120,10 @@ def parse_args() -> BootstrapConfig:
         rig_name=args.rig_name,
         gpu_limit=args.gpu_limit,
         heartbeat_interval=args.heartbeat_interval,
-        tunnel_url=args.tunnel_url.rstrip("/") if args.tunnel_url else args.ollama_url.rstrip("/"),
+        tunnel_url=args.tunnel_url.rstrip("/") if args.tunnel_url else None if args.tunnel_mode == "cloudflare" else args.ollama_url.rstrip("/"),
+        tunnel_mode=args.tunnel_mode,
+        cloudflared_bin=args.cloudflared_bin,
+        ollama_bin=args.ollama_bin,
         pull_model=not args.no_pull,
         dry_run=args.dry_run,
     )
@@ -122,12 +152,14 @@ async def ensure_ollama_ready(ollama_url: str) -> None:
         ) from exc
 
 
-async def ensure_model_installed(model: str) -> None:
-    if shutil.which("ollama") is None:
-        raise RuntimeError("The `ollama` command is not on PATH. Install Ollama or run with --no-pull.")
+async def ensure_model_installed(model: str, ollama_bin: str) -> None:
+    resolved_ollama = resolve_executable(ollama_bin)
+    if resolved_ollama is None:
+        raise RuntimeError("The `ollama` command is not on PATH. Run the Aight install script to install Ollama.")
 
+    output_lines: list[str] = []
     process = await asyncio.create_subprocess_exec(
-        "ollama",
+        resolved_ollama,
         "pull",
         model,
         stdout=asyncio.subprocess.PIPE,
@@ -135,11 +167,106 @@ async def ensure_model_installed(model: str) -> None:
     )
     if process.stdout is not None:
         async for raw_line in process.stdout:
-            print(raw_line.decode(errors="replace").rstrip())
+            line = raw_line.decode(errors="replace").rstrip()
+            output_lines.append(line)
+            print(line)
 
     exit_code = await process.wait()
     if exit_code != 0:
-        raise RuntimeError(f"`ollama pull {model}` failed with exit code {exit_code}")
+        detail = "\n".join(line for line in output_lines if line).strip()
+        raise RuntimeError(f"`ollama pull {model}` failed with exit code {exit_code}: {detail}")
+
+
+async def ensure_model_runs(ollama_url: str, model: str) -> None:
+    print(f"Testing Ollama model `{model}` on this rig...")
+    payload = {
+        "model": model,
+        "prompt": "Reply with OK.",
+        "stream": False,
+        "options": {"num_predict": 1},
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        try:
+            response = await client.post(f"{ollama_url}/api/generate", json=payload)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"Ollama could not run `{model}`: {format_ollama_error(exc.response)}") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Ollama could not run `{model}`: {exc}") from exc
+
+    print(f"Ollama model `{model}` loaded successfully.")
+
+
+def format_ollama_error(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("error"):
+            return str(payload["error"])
+    except ValueError:
+        pass
+    return response.text.strip() or f"HTTP {response.status_code}"
+
+
+async def start_cloudflare_tunnel(config: BootstrapConfig) -> tuple[str, asyncio.subprocess.Process]:
+    cloudflared = resolve_cloudflared(config.cloudflared_bin)
+    print(f"Starting Cloudflare Quick Tunnel for {config.ollama_url}...")
+    process = await asyncio.create_subprocess_exec(
+        cloudflared,
+        "tunnel",
+        "--url",
+        config.ollama_url,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    if process.stdout is None:
+        process.kill()
+        raise RuntimeError("Could not read cloudflared tunnel output.")
+
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        timeout_seconds = max(1, deadline - time.monotonic())
+        try:
+            raw_line = await asyncio.wait_for(process.stdout.readline(), timeout=timeout_seconds)
+        except TimeoutError:
+            break
+        if not raw_line:
+            break
+        line = raw_line.decode(errors="replace").strip()
+        if line:
+            print(f"cloudflared: {line}")
+        match = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", line)
+        if match:
+            tunnel_url = match.group(0).rstrip("/")
+            print(f"Cloudflare Quick Tunnel ready: {tunnel_url}")
+            return tunnel_url, process
+
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except TimeoutError:
+        process.kill()
+    raise RuntimeError(
+        "Cloudflare Quick Tunnel did not become ready. Install cloudflared or provide --tunnel-url manually."
+    )
+
+
+def resolve_cloudflared(cloudflared_bin: str) -> str:
+    resolved = resolve_executable(cloudflared_bin)
+    if resolved is not None:
+        return resolved
+    local_bin = Path(__file__).resolve().parent / "bin" / ("cloudflared.exe" if platform.system() == "Windows" else "cloudflared")
+    if local_bin.exists():
+        return str(local_bin)
+    raise RuntimeError(
+        "cloudflared is required for --tunnel-mode cloudflare. Install it or run the Aight installer script."
+    )
+
+
+def resolve_executable(command_or_path: str) -> str | None:
+    configured_path = Path(command_or_path).expanduser()
+    if configured_path.exists():
+        return str(configured_path)
+    return shutil.which(command_or_path)
 
 
 async def claim_rig(

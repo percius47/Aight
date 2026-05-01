@@ -50,8 +50,8 @@ export function OperatorConsole() {
   const setupCommands = useMemo(() => {
     const code = pairingCode?.pairing_code ?? "AIGHT-123456";
     return {
-      windows: `cd operator; .\\.venv\\Scripts\\python.exe bootstrap.py --pair ${code} --model gemma3:1b --hourly-rate-wei 1000 --gateway-url ${gatewayUrl} --tunnel-url http://127.0.0.1:11434`,
-      mac: `cd operator && ./.venv/bin/python bootstrap.py --pair ${code} --model gemma3:1b --hourly-rate-wei 1000 --gateway-url ${gatewayUrl} --tunnel-url http://127.0.0.1:11434`,
+      windows: `powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr -UseBasicParsing https://raw.githubusercontent.com/percius47/Aight/dev/operator/install.ps1 -OutFile $env:TEMP\\aight-install.ps1; & $env:TEMP\\aight-install.ps1 -Pair ${code} -Model gemma3:1b"`,
+      mac: `curl -fsSL https://raw.githubusercontent.com/percius47/Aight/dev/operator/install.sh | bash -s -- ${code} gemma3:1b`,
     };
   }, [pairingCode]);
 
