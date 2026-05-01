@@ -1,7 +1,7 @@
 param(
     [string]$Pair,
     [string]$Model = "llama3",
-    [string]$GatewayUrl = "http://3.7.107.134:8787",
+    [string]$GatewayUrl = "https://aight.sbs",
     [string]$GpuLimit = "auto"
 )
 
@@ -94,7 +94,7 @@ if (-not (Test-OllamaReady)) {
 
 if (-not (Test-Path $installRoot)) {
     Step "Downloading Aight operator client"
-    git clone --filter=blob:none --sparse --branch dev $repoUrl $installRoot
+    git clone --filter=blob:none --sparse --branch main $repoUrl $installRoot
     Push-Location $installRoot
     git sparse-checkout set operator
     Pop-Location

@@ -18,7 +18,7 @@ import httpx
 CONFIG_DIR = Path.home() / ".aight"
 RIG_CONFIG_PATH = CONFIG_DIR / "rig.json"
 DEVICE_CONFIG_PATH = CONFIG_DIR / "rig-device.json"
-DEFAULT_GATEWAY_URL = "http://3.7.107.134:8787"
+DEFAULT_GATEWAY_URL = "https://aight.sbs"
 
 
 @dataclass(frozen=True, slots=True)

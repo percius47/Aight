@@ -87,9 +87,9 @@ export function OperatorRigConsole() {
   const commands = useMemo(() => {
     const code = pairingCode?.pairing_code ?? "AIGHT-123456";
     return {
-      windows: `powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr -UseBasicParsing https://raw.githubusercontent.com/percius47/Aight/dev/operator/install.ps1 -OutFile $env:TEMP\\aight-install.ps1; & $env:TEMP\\aight-install.ps1 -Pair ${code} -Model ${model}"`,
-      mac: `curl -fsSL https://raw.githubusercontent.com/percius47/Aight/dev/operator/install.sh | bash -s -- ${code} ${model}`,
-      linux: `curl -fsSL https://raw.githubusercontent.com/percius47/Aight/dev/operator/install.sh | bash -s -- ${code} ${model}`,
+      windows: `powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr -UseBasicParsing https://raw.githubusercontent.com/percius47/Aight/main/operator/install.ps1 -OutFile $env:TEMP\\aight-install.ps1; & $env:TEMP\\aight-install.ps1 -Pair ${code} -Model ${model}"`,
+      mac: `curl -fsSL https://raw.githubusercontent.com/percius47/Aight/main/operator/install.sh | bash -s -- ${code} ${model}`,
+      linux: `curl -fsSL https://raw.githubusercontent.com/percius47/Aight/main/operator/install.sh | bash -s -- ${code} ${model}`,
     };
   }, [model, pairingCode?.pairing_code]);
 

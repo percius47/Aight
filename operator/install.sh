@@ -3,7 +3,7 @@ set -euo pipefail
 
 PAIR="${AIGHT_PAIRING_CODE:-${1:-}}"
 MODEL="${AIGHT_MODEL:-${2:-llama3}}"
-GATEWAY_URL="${AIGHT_GATEWAY_URL:-http://3.7.107.134:8787}"
+GATEWAY_URL="${AIGHT_GATEWAY_URL:-https://aight.sbs}"
 GPU_LIMIT="${AIGHT_GPU_LIMIT:-auto}"
 INSTALL_ROOT="${HOME}/.aight/operator"
 REPO_URL="https://github.com/percius47/Aight.git"
@@ -99,7 +99,7 @@ fi
 
 if [ ! -d "${INSTALL_ROOT}/.git" ]; then
   step "Downloading Aight operator client"
-  git clone --filter=blob:none --sparse --branch dev "${REPO_URL}" "${INSTALL_ROOT}"
+  git clone --filter=blob:none --sparse --branch main "${REPO_URL}" "${INSTALL_ROOT}"
   git -C "${INSTALL_ROOT}" sparse-checkout set operator
 else
   step "Updating Aight operator client"
