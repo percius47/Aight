@@ -87,11 +87,11 @@ export function OperatorRigConsole() {
   const commands = useMemo(() => {
     const code = pairingCode?.pairing_code ?? "AIGHT-123456";
     return {
-      windows: `cd operator; .\\.venv\\Scripts\\python.exe bootstrap.py --pair ${code} --model ${model} --hourly-rate-wei ${hourlyRateWei} --gateway-url ${gatewayUrl} --tunnel-url http://127.0.0.1:11434`,
-      mac: `cd operator && ./.venv/bin/python bootstrap.py --pair ${code} --model ${model} --hourly-rate-wei ${hourlyRateWei} --gateway-url ${gatewayUrl} --tunnel-url http://127.0.0.1:11434`,
-      linux: `cd operator && ./.venv/bin/python bootstrap.py --pair ${code} --model ${model} --hourly-rate-wei ${hourlyRateWei} --gateway-url ${gatewayUrl} --tunnel-url http://127.0.0.1:11434`,
+      windows: `powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr -UseBasicParsing https://raw.githubusercontent.com/percius47/Aight/dev/operator/install.ps1 -OutFile $env:TEMP\\aight-install.ps1; & $env:TEMP\\aight-install.ps1 -Pair ${code} -Model ${model}"`,
+      mac: `curl -fsSL https://raw.githubusercontent.com/percius47/Aight/dev/operator/install.sh | bash -s -- ${code} ${model}`,
+      linux: `curl -fsSL https://raw.githubusercontent.com/percius47/Aight/dev/operator/install.sh | bash -s -- ${code} ${model}`,
     };
-  }, [hourlyRateWei, model, pairingCode?.pairing_code]);
+  }, [model, pairingCode?.pairing_code]);
 
   function openPairModal(): void {
     setError(null);
@@ -562,7 +562,7 @@ function CommandStep({
   return (
     <div>
       <h3 className="text-xl font-semibold text-white">Step 4: Run command on rig</h3>
-      <p className="mt-2 text-sm leading-6 text-zinc-400">The bootstrapper verifies Ollama, checks/pulls the selected model, claims this code, and starts heartbeat.</p>
+      <p className="mt-2 text-sm leading-6 text-zinc-400">The bootstrapper verifies Ollama, opens a Cloudflare Quick Tunnel, claims this code, and starts heartbeat.</p>
       <div className="mt-5 grid gap-4">
         {Object.entries(commands).map(([label, command]) => (
           <CommandCard command={command} copied={copiedCommand === label} key={label} label={label} onCopy={() => onCopyCommand(label, command)} />
