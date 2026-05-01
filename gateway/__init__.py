@@ -1,0 +1,1 @@
+"""Aight Gateway package."""

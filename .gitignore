@@ -1,0 +1,32 @@
+# Cursor / IDE Metadata (Stealth Mode)
+.cursor/
+.cursorrules
+.vscode/
+*.code-workspace
+
+# Environment / Secrets
+.env
+.env.local
+.env.*.local
+gateway/.data/
+
+# Dependencies
+node_modules/
+__pycache__/
+venv/
+.venv/
+
+# Build Outputs
+dist/
+out/
+build/
+.next/
+cache/
+broadcast/
+
+# Hardhat/Foundry
+artifacts/
+typechain/
+cache_forge/
+contracts/lib/
+MASTER_PRD.md
