@@ -99,7 +99,7 @@ fi
 
 if [ ! -d "${INSTALL_ROOT}/.git" ]; then
   step "Downloading Aight operator client"
-  git clone --filter=blob:none --sparse --branch dev "${REPO_URL}" "${INSTALL_ROOT}"
+  git clone --filter=blob:none --sparse --branch main "${REPO_URL}" "${INSTALL_ROOT}"
   git -C "${INSTALL_ROOT}" sparse-checkout set operator
 else
   step "Updating Aight operator client"
