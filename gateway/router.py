@@ -190,6 +190,11 @@ async def list_buyer_rentals(
     return gateway_state.list_buyer_rentals(buyer_username=buyer_username, buyer_address=buyer_address)
 
 
+@router.get("/operator/rentals", response_model=list[BuyerRentalResponse])
+async def list_operator_rentals(operator_address: str) -> list[BuyerRentalResponse]:
+    return gateway_state.list_operator_rentals(operator_address)
+
+
 @router.delete("/buyer/rentals/{rental_id}")
 async def delete_buyer_rental(
     rental_id: str,
@@ -255,6 +260,13 @@ async def chat_completions(
         return StreamingResponse(encode_sse(events), media_type="text/event-stream")
 
     response = await acompletion(**completion_args)
+    usage = extract_completion_usage(response)
+    gateway_state.record_api_key_usage(
+        key_record.secret,
+        prompt_tokens=usage["prompt_tokens"],
+        completion_tokens=usage["completion_tokens"],
+        total_tokens=usage["total_tokens"],
+    )
     await telemetry_hub.publish(
         TelemetryEvent(
             event="completion",
@@ -320,6 +332,11 @@ async def stream_litellm_completion(completion_args: dict[str, Any], key_record:
                     )
                 )
             yield chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
+        gateway_state.record_api_key_usage(
+            key_record.secret,
+            completion_tokens=token_count,
+            total_tokens=token_count,
+        )
     except Exception as exc:
         await telemetry_hub.publish(
             TelemetryEvent(
@@ -346,3 +363,22 @@ def extract_delta_token(chunk: Any) -> str | None:
             if isinstance(content, str):
                 return content
     return None
+
+
+def extract_completion_usage(response: Any) -> dict[str, int]:
+    usage = getattr(response, "usage", None)
+    if hasattr(usage, "model_dump"):
+        usage = usage.model_dump()
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage")
+    if not isinstance(usage, dict):
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    total_tokens = int(usage.get("total_tokens") or prompt_tokens + completion_tokens)
+    return {
+        "prompt_tokens": max(0, prompt_tokens),
+        "completion_tokens": max(0, completion_tokens),
+        "total_tokens": max(0, total_tokens),
+    }

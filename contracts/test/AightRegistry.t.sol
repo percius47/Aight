@@ -11,6 +11,7 @@ contract AightRegistryTest is Test {
     address private treasury = address(0x7EA5);
     address private operator = address(0x0A1A);
     address private user = address(0xB0B);
+    address private keeper = address(0xC0FFEE);
 
     uint256 private constant MIN_OPERATOR_STAKE = 1 ether;
     uint256 private constant HEARTBEAT_GRACE_PERIOD = 30 minutes;
@@ -24,6 +25,7 @@ contract AightRegistryTest is Test {
         registry = new AightRegistry(owner, treasury, MIN_OPERATOR_STAKE, HEARTBEAT_GRACE_PERIOD);
         vm.deal(operator, 10 ether);
         vm.deal(user, 10 ether);
+        vm.deal(keeper, 10 ether);
     }
 
     function testStakeOperatorRegistersActiveNode() public {
@@ -82,7 +84,7 @@ contract AightRegistryTest is Test {
         uint256 escrowId = _createEscrow(3);
 
         vm.warp(block.timestamp + 1 hours);
-        vm.prank(operator);
+        vm.prank(keeper);
         registry.releaseHourlyPayment(escrowId);
 
         uint256 treasuryAmount = (HOURLY_RATE * registry.TREASURY_BPS()) / registry.BPS_DENOMINATOR();
@@ -90,17 +92,35 @@ contract AightRegistryTest is Test {
 
         assertEq(registry.withdrawable(operator), operatorAmount);
         assertEq(registry.withdrawable(treasury), treasuryAmount);
+        assertEq(registry.withdrawable(keeper), 0);
 
         (,,,,,, uint64 releasedHours, uint128 remainingWei,) = registry.escrows(escrowId);
         assertEq(releasedHours, 1);
         assertEq(remainingWei, HOURLY_RATE * 2);
     }
 
+    function testPermissionlessReleaseCannotCaptureFunds() public {
+        uint256 escrowId = _createEscrow(1);
+        uint256 keeperBalanceBefore = keeper.balance;
+
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(keeper);
+        registry.releaseHourlyPayment(escrowId);
+
+        uint256 treasuryAmount = (HOURLY_RATE * registry.TREASURY_BPS()) / registry.BPS_DENOMINATOR();
+        uint256 operatorAmount = HOURLY_RATE - treasuryAmount;
+
+        assertEq(registry.withdrawable(operator), operatorAmount);
+        assertEq(registry.withdrawable(treasury), treasuryAmount);
+        assertEq(registry.withdrawable(keeper), 0);
+        assertEq(keeper.balance, keeperBalanceBefore);
+    }
+
     function testSlashForMissedHeartbeatRefundsRemainingDeposit() public {
         uint256 escrowId = _createEscrow(3);
 
         vm.warp(block.timestamp + 1 hours);
-        vm.prank(operator);
+        vm.prank(keeper);
         registry.releaseHourlyPayment(escrowId);
 
         vm.warp(block.timestamp + HEARTBEAT_GRACE_PERIOD + 1);
@@ -134,7 +154,7 @@ contract AightRegistryTest is Test {
         uint256 escrowId = _createEscrow(1);
 
         vm.warp(block.timestamp + 1 hours);
-        vm.prank(operator);
+        vm.prank(keeper);
         registry.releaseHourlyPayment(escrowId);
 
         uint256 accruedAmount = registry.withdrawable(operator);

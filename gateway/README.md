@@ -47,7 +47,18 @@ AIGHT_REGISTRY_ADDRESS=<Base Sepolia registry address>
 AIGHT_BASE_SEPOLIA_RPC_URL=<Base Sepolia RPC URL>
 AIGHT_ALLOWED_ORIGINS=https://your-vercel-app.vercel.app,https://your-custom-domain.com
 AIGHT_STATE_PATH=/data/gateway-state.json
+AIGHT_SETTLEMENT_KEEPER_ENABLED=false
+AIGHT_SETTLEMENT_KEEPER_PRIVATE_KEY=<funded non-owner keeper key, only if keeper enabled>
+AIGHT_SETTLEMENT_KEEPER_INTERVAL_SECONDS=60
 ```
+
+## Settlement Keeper
+
+`AightRegistry.releaseHourlyPayment` is permissionless once an escrow hour is due, so the gateway can optionally run a keeper that pays gas to release due rental hours into withdrawable balances.
+
+The keeper key does not receive escrow funds and should not be the owner key. It only needs small Base Sepolia ETH for gas. Operators still call `withdraw()` from their own wallet to receive claimable payouts.
+
+Enabling this after a contract change requires redeploying `AightRegistry` and updating `AIGHT_REGISTRY_ADDRESS` in the gateway plus `NEXT_PUBLIC_AIGHT_REGISTRY_ADDRESS` in the frontend/Vercel environment.
 
 ## Local Dummy Flow
 

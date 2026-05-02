@@ -87,6 +87,7 @@ class RentalRecord:
     model: str
     duration_hours: int
     amount_wei: int
+    escrow_tx_hash: str | None
     status: str
     created_at: datetime
     expires_at: datetime
@@ -96,6 +97,11 @@ class RentalRecord:
     refund_wei: int = 0
     operator_payout_wei: int = 0
     slash_wei: int = 0
+    completion_count: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    last_used_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -230,6 +236,7 @@ class GatewayState:
             model=rig.model,
             duration_hours=payload.duration_hours,
             amount_wei=amount_wei,
+            escrow_tx_hash=payload.escrow_tx_hash,
             status="allocated",
             created_at=datetime.now(UTC),
             expires_at=expires_at,
@@ -237,6 +244,11 @@ class GatewayState:
             refund_wei=0,
             operator_payout_wei=0,
             slash_wei=0,
+            completion_count=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            last_used_at=None,
         )
         self._persist()
         return record
@@ -532,6 +544,25 @@ class GatewayState:
         rentals.sort(key=lambda record: record.created_at, reverse=True)
         return [self.to_rental_response(record) for record in rentals]
 
+    def list_operator_rentals(self, operator_address: str) -> list[BuyerRentalResponse]:
+        self._expire_allocated_rentals()
+        normalized_operator = operator_address.lower()
+        rentals = [
+            record
+            for record in self._rentals.values()
+            if record.operator_address == normalized_operator
+        ]
+        rentals.sort(key=lambda record: record.created_at, reverse=True)
+        return [self.to_rental_response(record) for record in rentals]
+
+    def list_settlement_rentals(self) -> list[RentalRecord]:
+        self._expire_allocated_rentals()
+        return [
+            record
+            for record in self._rentals.values()
+            if record.status in ("allocated", "expired") and record.escrow_id > 0
+        ]
+
     def delete_buyer_rental(
         self,
         rental_id: str,
@@ -561,6 +592,32 @@ class GatewayState:
 
     def _rental_for_api_key(self, api_key: str) -> RentalRecord | None:
         return next((record for record in self._rentals.values() if record.api_key == api_key), None)
+
+    def record_api_key_usage(
+        self,
+        api_key: str,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int | None = None,
+    ) -> None:
+        rental = self._rental_for_api_key(api_key)
+        if rental is None:
+            return
+
+        normalized_prompt_tokens = max(0, int(prompt_tokens))
+        normalized_completion_tokens = max(0, int(completion_tokens))
+        normalized_total_tokens = (
+            max(0, int(total_tokens))
+            if total_tokens is not None
+            else normalized_prompt_tokens + normalized_completion_tokens
+        )
+        rental.completion_count += 1
+        rental.prompt_tokens += normalized_prompt_tokens
+        rental.completion_tokens += normalized_completion_tokens
+        rental.total_tokens += normalized_total_tokens
+        rental.last_used_at = datetime.now(UTC)
+        self._persist()
 
     def _terminate_rentals_for_rig(self, rig: RigRecord, reason: str) -> None:
         now = datetime.now(UTC)
@@ -740,6 +797,7 @@ class GatewayState:
             model=record.model,
             duration_hours=record.duration_hours,
             amount_wei=record.amount_wei,
+            escrow_tx_hash=record.escrow_tx_hash,
             status=status,  # type: ignore[arg-type]
             created_at=record.created_at,
             expires_at=record.expires_at,
@@ -749,6 +807,11 @@ class GatewayState:
             refund_wei=record.refund_wei,
             operator_payout_wei=record.operator_payout_wei,
             slash_wei=record.slash_wei,
+            completion_count=record.completion_count,
+            prompt_tokens=record.prompt_tokens,
+            completion_tokens=record.completion_tokens,
+            total_tokens=record.total_tokens,
+            last_used_at=record.last_used_at,
         )
 
     @staticmethod
@@ -807,7 +870,7 @@ class GatewayState:
         self._rentals = {
             key: RentalRecord(
                 **self._with_rental_defaults(
-                    self._deserialize_datetimes(value, {"created_at", "expires_at", "terminated_at"})
+                    self._deserialize_datetimes(value, {"created_at", "expires_at", "terminated_at", "last_used_at"})
                 )
             )
             for key, value in payload.get("rentals", {}).items()
@@ -867,6 +930,7 @@ class GatewayState:
         result.setdefault("rig_name", "Aight Rig")
         result.setdefault("model", "gemma3:1b")
         result.setdefault("amount_wei", 0)
+        result.setdefault("escrow_tx_hash", None)
         result.setdefault("status", "allocated")
         result.setdefault("terminated_at", None)
         result.setdefault("termination_reason", None)
@@ -874,6 +938,11 @@ class GatewayState:
         result.setdefault("refund_wei", 0)
         result.setdefault("operator_payout_wei", 0)
         result.setdefault("slash_wei", 0)
+        result.setdefault("completion_count", 0)
+        result.setdefault("prompt_tokens", 0)
+        result.setdefault("completion_tokens", 0)
+        result.setdefault("total_tokens", 0)
+        result.setdefault("last_used_at", None)
         return result
 
     def _backfill_rentals_from_api_keys(self) -> bool:
@@ -917,6 +986,7 @@ class GatewayState:
                 model=rig.model if rig else operator.model if operator else "gemma3:1b",
                 duration_hours=duration_hours,
                 amount_wei=hourly_rate_wei * duration_hours,
+                escrow_tx_hash=None,
                 status="allocated",
                 created_at=datetime.now(UTC),
                 expires_at=api_key.expires_at,

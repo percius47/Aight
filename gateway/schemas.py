@@ -157,6 +157,7 @@ class IssueApiKeyRequest(BaseModel):
     operator_address: str
     rig_id: str | None = None
     duration_hours: int = Field(gt=0)
+    escrow_tx_hash: str | None = None
 
 
 class IssueApiKeyResponse(BaseModel):
@@ -178,6 +179,7 @@ class BuyerRentalResponse(BaseModel):
     model: str
     duration_hours: int
     amount_wei: int
+    escrow_tx_hash: str | None
     status: Literal["allocated", "terminated", "expired"]
     created_at: datetime
     expires_at: datetime
@@ -187,6 +189,11 @@ class BuyerRentalResponse(BaseModel):
     refund_wei: int
     operator_payout_wei: int
     slash_wei: int
+    completion_count: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    last_used_at: datetime | None
 
 
 class DemoEscrowRequest(BaseModel):
