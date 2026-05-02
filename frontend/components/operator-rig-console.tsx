@@ -51,7 +51,7 @@ export function OperatorRigConsole() {
   const [selectedRig, setSelectedRig] = useState<OperatorRig | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [step, setStep] = useState(0);
-  const [rigName, setRigName] = useState("Demo Rig");
+  const [rigName, setRigName] = useState("Rig");
   const [model, setModel] = useState("gemma3:1b");
   const [stakeWei, setStakeWei] = useState("1000");
   const [hourlyRateWei, setHourlyRateWei] = useState("1000");
@@ -422,7 +422,6 @@ function PairRigModal({
               canPair={canPair}
               hourlyRateWei={hourlyRateWei}
               isBaseSepolia={isBaseSepolia}
-              onDemoContinue={() => onStepChange(1)}
               onRateChange={onRateChange}
               onStake={onStake}
               onStakeChange={onStakeChange}
@@ -459,7 +458,6 @@ function StakeStep({
   canPair,
   hourlyRateWei,
   isBaseSepolia,
-  onDemoContinue,
   onRateChange,
   onStake,
   onStakeChange,
@@ -469,7 +467,6 @@ function StakeStep({
   canPair: boolean;
   hourlyRateWei: string;
   isBaseSepolia: boolean;
-  onDemoContinue: () => void;
   onRateChange: (value: string) => void;
   onStake: () => void;
   onStakeChange: (value: string) => void;
@@ -478,14 +475,12 @@ function StakeStep({
   return (
     <div>
       <h3 className="text-xl font-semibold text-white">Step 1: Stake for this rig</h3>
-      <p className="mt-2 text-sm leading-6 text-zinc-400">
-        Stake on Base Sepolia before pairing. For local demos, use the demo readiness path.
-      </p>
+      <p className="mt-2 text-sm leading-6 text-zinc-400">Stake on Base Sepolia before pairing this rig.</p>
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <TextInput label="Stake amount wei" onChange={onStakeChange} value={stakeWei} />
         <TextInput label="Hourly rate wei" onChange={onRateChange} value={hourlyRateWei} />
       </div>
-      <div className="mt-5 flex flex-wrap gap-3">
+      <div className="mt-5">
         <button
           className="rounded-2xl bg-[#00FF9D] px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400"
           disabled={busy || !canPair || !isBaseSepolia}
@@ -493,9 +488,6 @@ function StakeStep({
           type="button"
         >
           Stake on Base Sepolia
-        </button>
-        <button className="rounded-2xl border border-zinc-700 px-5 py-3 text-sm text-zinc-300" onClick={onDemoContinue} type="button">
-          Continue demo setup
         </button>
       </div>
     </div>

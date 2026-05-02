@@ -7,7 +7,7 @@ import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 
 import { useAightAccount } from "@/hooks/use-aight-account";
 import { gatewayUrl, registryAddress } from "@/lib/config";
-import type { BuyerRentalResponse, DemoEscrow, IssuedApiKey, OperatorRig, RentedRig } from "@/lib/types";
+import type { BuyerRentalResponse, IssuedApiKey, OperatorRig, RentedRig } from "@/lib/types";
 
 const registryAbi = [
   {
@@ -33,8 +33,6 @@ const registryAbi = [
   },
 ] as const;
 
-type PurchaseMode = "demo" | "onchain";
-
 export function BuyerConsole() {
   const { address } = useAccount();
   const publicClient = usePublicClient();
@@ -51,11 +49,10 @@ export function BuyerConsole() {
   const [busy, setBusy] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pendingPurchaseMode, setPendingPurchaseMode] = useState<PurchaseMode | null>(null);
+  const [purchaseConfirmOpen, setPurchaseConfirmOpen] = useState(false);
   const [testingToolsOpen, setTestingToolsOpen] = useState(false);
 
   const buyerAddress = address ?? normalizeAddress(demoWalletAddress);
-  const walletReady = Boolean(buyerAddress);
 
   async function loadRigs(): Promise<void> {
     const response = await fetch(`${gatewayUrl}/operator/rigs`, { cache: "no-store" });
@@ -147,40 +144,6 @@ export function BuyerConsole() {
     return (await response.json()) as IssuedApiKey;
   }
 
-  async function createDemoEscrowAndKey(): Promise<void> {
-    if (!buyerAddress || !selectedRig) {
-      setError("Connect a buyer wallet and select a paired rig first.");
-      return;
-    }
-
-    setBusy(true);
-    setError(null);
-    try {
-      const escrowResponse = await fetch(`${gatewayUrl}/buyer/demo-escrows`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          buyer_address: buyerAddress,
-          operator_address: selectedRig.operator_address,
-          rig_id: selectedRig.rig_id,
-          duration_hours: durationHours,
-        }),
-      });
-      if (!escrowResponse.ok) {
-        throw new Error(await escrowResponse.text());
-      }
-      const escrow = (await escrowResponse.json()) as DemoEscrow;
-      const issuedKey = await issueKeyFromEscrow(escrow.escrow_id, escrow.operator_address);
-      setApiKey(issuedKey);
-      await loadRentals();
-      await loadRigs();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : "Could not create demo escrow.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function createOnChainEscrowAndKey(): Promise<void> {
     if (!address || !selectedRig || !publicClient) {
       setError("Connect a buyer wallet and select a paired rig first.");
@@ -219,15 +182,8 @@ export function BuyerConsole() {
   }
 
   async function confirmPurchase(): Promise<void> {
-    const mode = pendingPurchaseMode;
-    setPendingPurchaseMode(null);
-    if (mode === "demo") {
-      await createDemoEscrowAndKey();
-      return;
-    }
-    if (mode === "onchain") {
-      await createOnChainEscrowAndKey();
-    }
+    setPurchaseConfirmOpen(false);
+    await createOnChainEscrowAndKey();
   }
 
   async function deleteRental(rental: RentedRig): Promise<void> {
@@ -347,10 +303,12 @@ export function BuyerConsole() {
             </div>
 
             <div className="mt-5 flex flex-wrap gap-3">
-              <button className="rounded-2xl bg-cyan-300 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400" disabled={busy || !walletReady} onClick={() => setPendingPurchaseMode("demo")} type="button">
-                Demo stake + key
-              </button>
-              <button className="rounded-2xl border border-cyan-300/40 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-cyan-200 disabled:border-zinc-700 disabled:text-zinc-600" disabled={busy || !address} onClick={() => setPendingPurchaseMode("onchain")} type="button">
+              <button
+                className="rounded-2xl bg-cyan-300 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400"
+                disabled={busy || !address}
+                onClick={() => setPurchaseConfirmOpen(true)}
+                type="button"
+              >
                 Base Sepolia stake + key
               </button>
             </div>
@@ -388,13 +346,12 @@ export function BuyerConsole() {
         </div>
       ) : null}
 
-      {selectedRig && pendingPurchaseMode ? (
+      {selectedRig && purchaseConfirmOpen ? (
         <PurchaseConfirmModal
           amountWei={amountWei}
           busy={busy}
           durationHours={durationHours}
-          mode={pendingPurchaseMode}
-          onCancel={() => setPendingPurchaseMode(null)}
+          onCancel={() => setPurchaseConfirmOpen(false)}
           onConfirm={() => void confirmPurchase()}
           rig={selectedRig}
         />
@@ -557,7 +514,6 @@ function PurchaseConfirmModal({
   amountWei,
   busy,
   durationHours,
-  mode,
   onCancel,
   onConfirm,
   rig,
@@ -565,7 +521,6 @@ function PurchaseConfirmModal({
   amountWei: number;
   busy: boolean;
   durationHours: number;
-  mode: PurchaseMode;
   onCancel: () => void;
   onConfirm: () => void;
   rig: OperatorRig;
@@ -577,7 +532,7 @@ function PurchaseConfirmModal({
         <h2 className="mt-2 text-2xl font-semibold text-white">Purchase LLM inference</h2>
         <p className="mt-3 text-sm leading-6 text-zinc-400">
           You are purchasing inference on this rig for {durationHours} hour{durationHours === 1 ? "" : "s"}.
-          Once confirmed, the stake/key generation action cannot be reversed from this demo flow.
+          Once confirmed, the on-chain stake and key generation action cannot be reversed.
         </p>
 
         <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -596,7 +551,7 @@ function PurchaseConfirmModal({
             Cancel
           </button>
           <button className="rounded-2xl bg-cyan-300 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400" disabled={busy} onClick={onConfirm} type="button">
-            {busy ? "Working..." : mode === "demo" ? "Confirm demo stake" : "Confirm on-chain stake"}
+            {busy ? "Working..." : "Confirm on-chain stake"}
           </button>
         </div>
       </section>
