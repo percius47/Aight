@@ -75,12 +75,17 @@ export type IssuedApiKey = {
 export type RentedRig = {
   apiKey: string;
   amountWei: number;
+  completionCount: number;
+  completionTokens: number;
   durationHours: number;
   escrowId: number;
+  escrowTxHash: string | null;
   expiresAt: string;
+  lastUsedAt: string | null;
   model: string;
   operatorAddress: string;
   operatorPayoutWei: number;
+  promptTokens: number;
   refundWei: number;
   rentedAt: string;
   rentalId: string;
@@ -91,6 +96,7 @@ export type RentedRig = {
   status: "allocated" | "terminated" | "expired";
   terminatedAt: string | null;
   terminationReason: string | null;
+  totalTokens: number;
   usedHours: number;
 };
 
@@ -107,6 +113,7 @@ export type BuyerRentalResponse = {
   model: string;
   duration_hours: number;
   amount_wei: number;
+  escrow_tx_hash: string | null;
   status: "allocated" | "terminated" | "expired";
   created_at: string;
   expires_at: string;
@@ -116,6 +123,11 @@ export type BuyerRentalResponse = {
   refund_wei: number;
   operator_payout_wei: number;
   slash_wei: number;
+  completion_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  last_used_at: string | null;
 };
 
 export type TelemetryEvent = {

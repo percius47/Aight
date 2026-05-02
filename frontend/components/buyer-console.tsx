@@ -7,7 +7,7 @@ import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 
 import { useAightAccount } from "@/hooks/use-aight-account";
 import { gatewayUrl, registryAddress } from "@/lib/config";
-import type { BuyerRentalResponse, DemoEscrow, IssuedApiKey, OperatorRig, RentedRig } from "@/lib/types";
+import type { BuyerRentalResponse, IssuedApiKey, OperatorRig, RentedRig } from "@/lib/types";
 
 const registryAbi = [
   {
@@ -33,7 +33,7 @@ const registryAbi = [
   },
 ] as const;
 
-type PurchaseMode = "demo" | "onchain";
+const baseSepoliaTxUrl = (hash: string) => `https://sepolia.basescan.org/tx/${hash}`;
 
 export function BuyerConsole() {
   const { address } = useAccount();
@@ -51,11 +51,16 @@ export function BuyerConsole() {
   const [busy, setBusy] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pendingPurchaseMode, setPendingPurchaseMode] = useState<PurchaseMode | null>(null);
+  const [purchaseConfirmOpen, setPurchaseConfirmOpen] = useState(false);
   const [testingToolsOpen, setTestingToolsOpen] = useState(false);
+  const [latestEscrowReceipt, setLatestEscrowReceipt] = useState<{
+    amountWei: number;
+    escrowId: number;
+    operatorAddress: string;
+    txHash: string;
+  } | null>(null);
 
   const buyerAddress = address ?? normalizeAddress(demoWalletAddress);
-  const walletReady = Boolean(buyerAddress);
 
   async function loadRigs(): Promise<void> {
     const response = await fetch(`${gatewayUrl}/operator/rigs`, { cache: "no-store" });
@@ -121,7 +126,7 @@ export function BuyerConsole() {
   }, [liveRigs, searchQuery]);
   const amountWei = selectedRig ? selectedRig.hourly_rate_wei * durationHours : 0;
 
-  async function issueKeyFromEscrow(escrowId: number, operatorAddress: string): Promise<IssuedApiKey> {
+  async function issueKeyFromEscrow(escrowId: number, operatorAddress: string, escrowTxHash: string): Promise<IssuedApiKey> {
     if (!buyerAddress) {
       throw new Error("Connect buyer wallet first.");
     }
@@ -139,46 +144,13 @@ export function BuyerConsole() {
         operator_address: operatorAddress,
         rig_id: selectedRig?.rig_id,
         duration_hours: durationHours,
+        escrow_tx_hash: escrowTxHash,
       }),
     });
     if (!response.ok) {
       throw new Error(await response.text());
     }
     return (await response.json()) as IssuedApiKey;
-  }
-
-  async function createDemoEscrowAndKey(): Promise<void> {
-    if (!buyerAddress || !selectedRig) {
-      setError("Connect a buyer wallet and select a paired rig first.");
-      return;
-    }
-
-    setBusy(true);
-    setError(null);
-    try {
-      const escrowResponse = await fetch(`${gatewayUrl}/buyer/demo-escrows`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          buyer_address: buyerAddress,
-          operator_address: selectedRig.operator_address,
-          rig_id: selectedRig.rig_id,
-          duration_hours: durationHours,
-        }),
-      });
-      if (!escrowResponse.ok) {
-        throw new Error(await escrowResponse.text());
-      }
-      const escrow = (await escrowResponse.json()) as DemoEscrow;
-      const issuedKey = await issueKeyFromEscrow(escrow.escrow_id, escrow.operator_address);
-      setApiKey(issuedKey);
-      await loadRentals();
-      await loadRigs();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : "Could not create demo escrow.");
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function createOnChainEscrowAndKey(): Promise<void> {
@@ -207,8 +179,14 @@ export function BuyerConsole() {
       if (!escrowId) {
         throw new Error("Escrow transaction succeeded, but escrow id was not found in logs.");
       }
-      const issuedKey = await issueKeyFromEscrow(escrowId, selectedRig.operator_address);
+      const issuedKey = await issueKeyFromEscrow(escrowId, selectedRig.operator_address, hash);
       setApiKey(issuedKey);
+      setLatestEscrowReceipt({
+        amountWei,
+        escrowId,
+        operatorAddress: selectedRig.operator_address,
+        txHash: hash,
+      });
       await loadRentals();
       await loadRigs();
     } catch (exc) {
@@ -219,15 +197,8 @@ export function BuyerConsole() {
   }
 
   async function confirmPurchase(): Promise<void> {
-    const mode = pendingPurchaseMode;
-    setPendingPurchaseMode(null);
-    if (mode === "demo") {
-      await createDemoEscrowAndKey();
-      return;
-    }
-    if (mode === "onchain") {
-      await createOnChainEscrowAndKey();
-    }
+    setPurchaseConfirmOpen(false);
+    await createOnChainEscrowAndKey();
   }
 
   async function deleteRental(rental: RentedRig): Promise<void> {
@@ -287,6 +258,7 @@ export function BuyerConsole() {
       }
       const payload = await response.json();
       setAgentResponse(payload.choices?.[0]?.message?.content ?? JSON.stringify(payload));
+      await loadRentals();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "Inference test failed.");
     } finally {
@@ -347,10 +319,12 @@ export function BuyerConsole() {
             </div>
 
             <div className="mt-5 flex flex-wrap gap-3">
-              <button className="rounded-2xl bg-cyan-300 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400" disabled={busy || !walletReady} onClick={() => setPendingPurchaseMode("demo")} type="button">
-                Demo stake + key
-              </button>
-              <button className="rounded-2xl border border-cyan-300/40 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-cyan-200 disabled:border-zinc-700 disabled:text-zinc-600" disabled={busy || !address} onClick={() => setPendingPurchaseMode("onchain")} type="button">
+              <button
+                className="rounded-2xl bg-cyan-300 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400"
+                disabled={busy || !address}
+                onClick={() => setPurchaseConfirmOpen(true)}
+                type="button"
+              >
                 Base Sepolia stake + key
               </button>
             </div>
@@ -374,6 +348,15 @@ export function BuyerConsole() {
                     Test agent call
                   </button>
                 </div>
+                {latestEscrowReceipt?.escrowId === apiKey.escrow_id ? (
+                  <TxReceiptCard
+                    amountWei={latestEscrowReceipt.amountWei}
+                    label="Escrow receipt"
+                    primary={`Escrow #${latestEscrowReceipt.escrowId}`}
+                    secondary={`Operator ${shortAddress(latestEscrowReceipt.operatorAddress)}`}
+                    txHash={latestEscrowReceipt.txHash}
+                  />
+                ) : null}
               </div>
             ) : null}
 
@@ -388,13 +371,12 @@ export function BuyerConsole() {
         </div>
       ) : null}
 
-      {selectedRig && pendingPurchaseMode ? (
+      {selectedRig && purchaseConfirmOpen ? (
         <PurchaseConfirmModal
           amountWei={amountWei}
           busy={busy}
           durationHours={durationHours}
-          mode={pendingPurchaseMode}
-          onCancel={() => setPendingPurchaseMode(null)}
+          onCancel={() => setPurchaseConfirmOpen(false)}
           onConfirm={() => void confirmPurchase()}
           rig={selectedRig}
         />
@@ -557,7 +539,6 @@ function PurchaseConfirmModal({
   amountWei,
   busy,
   durationHours,
-  mode,
   onCancel,
   onConfirm,
   rig,
@@ -565,7 +546,6 @@ function PurchaseConfirmModal({
   amountWei: number;
   busy: boolean;
   durationHours: number;
-  mode: PurchaseMode;
   onCancel: () => void;
   onConfirm: () => void;
   rig: OperatorRig;
@@ -577,7 +557,7 @@ function PurchaseConfirmModal({
         <h2 className="mt-2 text-2xl font-semibold text-white">Purchase LLM inference</h2>
         <p className="mt-3 text-sm leading-6 text-zinc-400">
           You are purchasing inference on this rig for {durationHours} hour{durationHours === 1 ? "" : "s"}.
-          Once confirmed, the stake/key generation action cannot be reversed from this demo flow.
+          Once confirmed, the on-chain stake and key generation action cannot be reversed.
         </p>
 
         <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -596,7 +576,7 @@ function PurchaseConfirmModal({
             Cancel
           </button>
           <button className="rounded-2xl bg-cyan-300 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400" disabled={busy} onClick={onConfirm} type="button">
-            {busy ? "Working..." : mode === "demo" ? "Confirm demo stake" : "Confirm on-chain stake"}
+            {busy ? "Working..." : "Confirm on-chain stake"}
           </button>
         </div>
       </section>
@@ -663,6 +643,32 @@ function RentedRigsSection({
                 <Metric label="Hours" value={rental.durationHours.toString()} />
                 <Metric label="Paid" value={`${rental.amountWei} wei`} />
               </div>
+              {rental.escrowTxHash ? (
+                <TxReceiptCard
+                  amountWei={rental.amountWei}
+                  label="Rental stake receipt"
+                  primary={`Escrow #${rental.escrowId}`}
+                  secondary={`Operator ${shortAddress(rental.operatorAddress)}`}
+                  txHash={rental.escrowTxHash}
+                />
+              ) : null}
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <Metric label="Operator 90%" value={`${rental.operatorPayoutWei || Math.floor(rental.amountWei * 0.9)} wei`} />
+                <Metric label="Treasury 10%" value={`${Math.max(0, rental.amountWei - (rental.operatorPayoutWei || Math.floor(rental.amountWei * 0.9)))} wei`} />
+              </div>
+              <div className="mt-4 rounded-3xl border border-cyan-300/15 bg-cyan-300/5 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-[0.24em] text-cyan-200">Live usage</p>
+                  <p className="text-xs text-zinc-500">
+                    {rental.lastUsedAt ? `Last used ${formatTime(rental.lastUsedAt)}` : "No calls yet"}
+                  </p>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-3">
+                  <Metric label="Calls" value={rental.completionCount.toString()} />
+                  <Metric label="Tokens" value={rental.totalTokens.toString()} />
+                  <Metric label="Prompt / output" value={`${rental.promptTokens}/${rental.completionTokens}`} />
+                </div>
+              </div>
               {rental.status === "terminated" ? (
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <Metric label="Used" value={`${rental.usedHours} h`} />
@@ -724,6 +730,38 @@ function Metric({ label, value }: Readonly<{ label: string; value: string }>) {
     <div className="rounded-2xl border border-zinc-800 bg-black/40 p-3">
       <p className="text-[0.65rem] uppercase tracking-[0.25em] text-zinc-600">{label}</p>
       <p className="mt-2 break-all text-sm font-semibold text-zinc-100">{value}</p>
+    </div>
+  );
+}
+
+function TxReceiptCard({
+  amountWei,
+  label,
+  primary,
+  secondary,
+  txHash,
+}: Readonly<{ amountWei: number; label: string; primary: string; secondary: string; txHash: string }>) {
+  return (
+    <div className="mt-4 rounded-3xl border border-cyan-300/20 bg-cyan-300/5 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-cyan-200">{label}</p>
+          <p className="mt-2 text-sm font-semibold text-white">{primary}</p>
+          <p className="mt-1 text-xs text-zinc-500">{secondary}</p>
+        </div>
+        <a
+          className="rounded-2xl border border-cyan-300/40 px-4 py-2 font-mono text-xs font-bold uppercase tracking-[0.14em] text-cyan-200 transition hover:bg-cyan-300/10"
+          href={baseSepoliaTxUrl(txHash)}
+          rel="noreferrer"
+          target="_blank"
+        >
+          View on BaseScan
+        </a>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <Metric label="Amount" value={`${amountWei} wei`} />
+        <Metric label="Tx hash" value={txHash} />
+      </div>
     </div>
   );
 }
@@ -809,16 +847,29 @@ function rentalStatusStyle(status: RentedRig["status"]): string {
   return "border-zinc-700 bg-zinc-900 text-zinc-500";
 }
 
+function shortAddress(value: string): string {
+  return value.length > 12 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
+}
+
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
+}
+
 function toRentedRig(payload: BuyerRentalResponse): RentedRig {
   return {
     apiKey: payload.api_key,
     amountWei: payload.amount_wei,
+    completionCount: payload.completion_count ?? 0,
+    completionTokens: payload.completion_tokens ?? 0,
     durationHours: payload.duration_hours,
     escrowId: payload.escrow_id,
+    escrowTxHash: payload.escrow_tx_hash ?? null,
     expiresAt: payload.expires_at,
+    lastUsedAt: payload.last_used_at ?? null,
     model: payload.model,
     operatorAddress: payload.operator_address,
     operatorPayoutWei: payload.operator_payout_wei,
+    promptTokens: payload.prompt_tokens ?? 0,
     refundWei: payload.refund_wei,
     rentalId: payload.rental_id,
     rentedAt: payload.created_at,
@@ -829,6 +880,7 @@ function toRentedRig(payload: BuyerRentalResponse): RentedRig {
     status: payload.status,
     terminatedAt: payload.terminated_at,
     terminationReason: payload.termination_reason,
+    totalTokens: payload.total_tokens ?? 0,
     usedHours: payload.used_hours,
   };
 }

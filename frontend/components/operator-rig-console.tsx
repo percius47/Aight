@@ -1,11 +1,11 @@
 "use client";
 
-import { keccak256, toBytes } from "viem";
+import { keccak256, toBytes, zeroAddress } from "viem";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAccount, useChainId, useWriteContract } from "wagmi";
+import { useAccount, useChainId, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 
 import { gatewayUrl, registryAddress } from "@/lib/config";
-import type { OperatorRig, PairingCode, RigStatus } from "@/lib/types";
+import type { BuyerRentalResponse, OperatorRig, PairingCode, RigStatus } from "@/lib/types";
 
 const baseSepoliaChainId = 84532;
 const supportedModels = ["gemma3:1b", "llama3", "llama3.2", "mistral", "deepseek-coder"];
@@ -31,7 +31,47 @@ const registryAbi = [
     ],
     outputs: [],
   },
+  {
+    type: "function",
+    name: "releaseHourlyPayment",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "escrowId", type: "uint256" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "withdrawable",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "amountWei", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "escrows",
+    stateMutability: "view",
+    inputs: [{ name: "escrowId", type: "uint256" }],
+    outputs: [
+      { name: "user", type: "address" },
+      { name: "operator", type: "address" },
+      { name: "hourlyRateWei", type: "uint96" },
+      { name: "startedAt", type: "uint64" },
+      { name: "lastReleaseAt", type: "uint64" },
+      { name: "durationHours", type: "uint64" },
+      { name: "releasedHours", type: "uint64" },
+      { name: "remainingWei", type: "uint128" },
+      { name: "slashed", type: "bool" },
+    ],
+  },
 ] as const;
+
+const baseSepoliaTxUrl = (hash: string) => `https://sepolia.basescan.org/tx/${hash}`;
 
 const statusStyles: Record<RigStatus, string> = {
   installing: "border-sky-400/40 bg-sky-400/10 text-sky-200",
@@ -45,13 +85,15 @@ const statusStyles: Record<RigStatus, string> = {
 export function OperatorRigConsole() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
+  const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
   const [demoWalletAddress, setDemoWalletAddress] = useState("");
   const [rigs, setRigs] = useState<OperatorRig[]>([]);
+  const [operatorRentals, setOperatorRentals] = useState<OperatorRental[]>([]);
   const [selectedRig, setSelectedRig] = useState<OperatorRig | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [step, setStep] = useState(0);
-  const [rigName, setRigName] = useState("Demo Rig");
+  const [rigName, setRigName] = useState("Rig");
   const [model, setModel] = useState("gemma3:1b");
   const [stakeWei, setStakeWei] = useState("1000");
   const [hourlyRateWei, setHourlyRateWei] = useState("1000");
@@ -60,9 +102,24 @@ export function OperatorRigConsole() {
   const [hasCopiedInstallerCommand, setHasCopiedInstallerCommand] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stakeReceipt, setStakeReceipt] = useState<{
+    hourlyRateWei: string;
+    stakeWei: string;
+    txHash: string;
+  } | null>(null);
+  const [payoutReceipt, setPayoutReceipt] = useState<{ label: string; txHash: string } | null>(null);
 
   const operatorAddress = address ?? normalizeAddress(demoWalletAddress);
   const walletReady = Boolean(operatorAddress);
+  const { data: withdrawableWei = 0n, refetch: refetchWithdrawable } = useReadContract({
+    address: registryAddress as `0x${string}`,
+    abi: registryAbi,
+    functionName: "withdrawable",
+    args: [operatorAddress ?? zeroAddress],
+    query: {
+      enabled: Boolean(operatorAddress),
+    },
+  });
 
   const loadRigs = useCallback(async () => {
     if (!operatorAddress) {
@@ -82,11 +139,35 @@ export function OperatorRigConsole() {
     }
   }, [operatorAddress]);
 
+  const loadOperatorRentals = useCallback(async () => {
+    if (!operatorAddress) {
+      setOperatorRentals([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${gatewayUrl}/operator/rentals?operator_address=${operatorAddress}`, { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as BuyerRentalResponse[];
+      setOperatorRentals(payload.map(toOperatorRental));
+    } catch {
+      setError("Gateway is not reachable yet.");
+    }
+  }, [operatorAddress]);
+
   useEffect(() => {
     void loadRigs();
     const interval = window.setInterval(() => void loadRigs(), 5000);
     return () => window.clearInterval(interval);
   }, [loadRigs]);
+
+  useEffect(() => {
+    void loadOperatorRentals();
+    const interval = window.setInterval(() => void loadOperatorRentals(), 5000);
+    return () => window.clearInterval(interval);
+  }, [loadOperatorRentals]);
 
   const liveRigs = useMemo(() => rigs.filter((rig) => rig.status !== "halted"), [rigs]);
   const isBaseSepolia = chainId === baseSepoliaChainId;
@@ -118,7 +199,7 @@ export function OperatorRigConsole() {
     setBusy(true);
     setError(null);
     try {
-      await writeContractAsync({
+      const hash = await writeContractAsync({
         address: registryAddress as `0x${string}`,
         abi: registryAbi,
         functionName: "stakeOperator",
@@ -130,9 +211,63 @@ export function OperatorRigConsole() {
         ],
         value: BigInt(stakeWei),
       });
+      if (publicClient) {
+        await publicClient.waitForTransactionReceipt({ hash });
+      }
+      setStakeReceipt({ hourlyRateWei, stakeWei, txHash: hash });
       setStep(1);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "Operator staking failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function releaseHourlyPayment(escrowId: number | null): Promise<void> {
+    if (!escrowId) {
+      setError("This rental does not have an escrow id to release.");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const hash = await writeContractAsync({
+        address: registryAddress as `0x${string}`,
+        abi: registryAbi,
+        functionName: "releaseHourlyPayment",
+        args: [BigInt(escrowId)],
+      });
+      if (publicClient) {
+        await publicClient.waitForTransactionReceipt({ hash });
+      }
+      setPayoutReceipt({ label: `Released escrow #${escrowId}`, txHash: hash });
+      await refetchWithdrawable();
+      await loadOperatorRentals();
+      await loadRigs();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Unable to release hourly payment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function withdrawPayout(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      const hash = await writeContractAsync({
+        address: registryAddress as `0x${string}`,
+        abi: registryAbi,
+        functionName: "withdraw",
+      });
+      if (publicClient) {
+        await publicClient.waitForTransactionReceipt({ hash });
+      }
+      setPayoutReceipt({ label: "Withdrawn claimable payout", txHash: hash });
+      await refetchWithdrawable();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Unable to withdraw payout.");
     } finally {
       setBusy(false);
     }
@@ -236,7 +371,10 @@ export function OperatorRigConsole() {
         isBaseSepolia={isBaseSepolia}
         onPair={openPairModal}
         onDemoWalletChange={setDemoWalletAddress}
+        onWithdrawPayout={() => void withdrawPayout()}
         operatorAddress={operatorAddress}
+        payoutReceipt={payoutReceipt}
+        withdrawableWei={withdrawableWei}
       />
 
       <LiveRigsSection
@@ -247,7 +385,18 @@ export function OperatorRigConsole() {
         rigs={liveRigs}
       />
 
-      {selectedRig ? <RigDetailsPanel onClose={() => setSelectedRig(null)} rig={selectedRig} /> : null}
+      <OperatorSettlementQueue
+        busy={busy}
+        onRelease={(escrowId) => void releaseHourlyPayment(escrowId)}
+        rentals={operatorRentals}
+      />
+
+      {selectedRig ? (
+        <RigDetailsPanel
+          onClose={() => setSelectedRig(null)}
+          rig={selectedRig}
+        />
+      ) : null}
       {error ? <p className="rounded-2xl border border-red-400/30 bg-red-400/10 p-4 text-sm text-red-200">{error}</p> : null}
 
       {modalOpen ? (
@@ -272,6 +421,7 @@ export function OperatorRigConsole() {
           onStepChange={setStep}
           pairingCode={pairingCode}
           rigName={rigName}
+          stakeReceipt={stakeReceipt}
           stakeWei={stakeWei}
           step={step}
         />
@@ -288,7 +438,10 @@ function OperatorNavbar({
   isBaseSepolia,
   onDemoWalletChange,
   onPair,
+  onWithdrawPayout,
   operatorAddress,
+  payoutReceipt,
+  withdrawableWei,
 }: Readonly<{
   address: string | undefined;
   canPair: boolean;
@@ -297,7 +450,10 @@ function OperatorNavbar({
   isBaseSepolia: boolean;
   onDemoWalletChange: (value: string) => void;
   onPair: () => void;
+  onWithdrawPayout: () => void;
   operatorAddress: string | undefined;
+  payoutReceipt: { label: string; txHash: string } | null;
+  withdrawableWei: bigint;
 }>) {
   return (
     <section className="rounded-4xl border border-[#00FF9D]/20 bg-zinc-950/80 p-5 shadow-[0_0_60px_rgba(0,255,157,0.08)]">
@@ -314,8 +470,9 @@ function OperatorNavbar({
       <div className="mt-5 grid gap-3 md:grid-cols-3">
         <InfoTile label="Wallet" value={operatorAddress ?? "Not connected"} />
         <InfoTile label="Network" value={isBaseSepolia ? "Base Sepolia ready" : `Chain ${chainId || "disconnected"}`} />
-        <InfoTile label="Registry" value={registryAddress} />
+        <InfoTile label="Claimable payout" value={`${withdrawableWei.toString()} wei`} />
       </div>
+      {payoutReceipt ? <TxReceiptCard label={payoutReceipt.label} txHash={payoutReceipt.txHash} /> : null}
 
       {!address ? (
         <label className="mt-5 grid gap-2 text-xs uppercase tracking-[0.22em] text-zinc-500">
@@ -336,6 +493,14 @@ function OperatorNavbar({
         type="button"
       >
         Pair new rig
+      </button>
+      <button
+        className="ml-3 mt-5 rounded-2xl border border-[#00FF9D]/40 px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.16em] text-[#00FF9D] disabled:cursor-not-allowed disabled:border-zinc-700 disabled:text-zinc-600"
+        disabled={!operatorAddress || withdrawableWei === 0n}
+        onClick={onWithdrawPayout}
+        type="button"
+      >
+        Withdraw payout
       </button>
     </section>
   );
@@ -362,6 +527,7 @@ function PairRigModal({
   onStepChange,
   pairingCode,
   rigName,
+  stakeReceipt,
   stakeWei,
   step,
 }: Readonly<{
@@ -385,6 +551,7 @@ function PairRigModal({
   onStepChange: (value: number) => void;
   pairingCode: PairingCode | null;
   rigName: string;
+  stakeReceipt: { hourlyRateWei: string; stakeWei: string; txHash: string } | null;
   stakeWei: string;
   step: number;
 }>) {
@@ -422,10 +589,10 @@ function PairRigModal({
               canPair={canPair}
               hourlyRateWei={hourlyRateWei}
               isBaseSepolia={isBaseSepolia}
-              onDemoContinue={() => onStepChange(1)}
               onRateChange={onRateChange}
               onStake={onStake}
               onStakeChange={onStakeChange}
+              stakeReceipt={stakeReceipt}
               stakeWei={stakeWei}
             />
           ) : null}
@@ -459,33 +626,31 @@ function StakeStep({
   canPair,
   hourlyRateWei,
   isBaseSepolia,
-  onDemoContinue,
   onRateChange,
   onStake,
   onStakeChange,
+  stakeReceipt,
   stakeWei,
 }: Readonly<{
   busy: boolean;
   canPair: boolean;
   hourlyRateWei: string;
   isBaseSepolia: boolean;
-  onDemoContinue: () => void;
   onRateChange: (value: string) => void;
   onStake: () => void;
   onStakeChange: (value: string) => void;
+  stakeReceipt: { hourlyRateWei: string; stakeWei: string; txHash: string } | null;
   stakeWei: string;
 }>) {
   return (
     <div>
       <h3 className="text-xl font-semibold text-white">Step 1: Stake for this rig</h3>
-      <p className="mt-2 text-sm leading-6 text-zinc-400">
-        Stake on Base Sepolia before pairing. For local demos, use the demo readiness path.
-      </p>
+      <p className="mt-2 text-sm leading-6 text-zinc-400">Stake on Base Sepolia before pairing this rig.</p>
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <TextInput label="Stake amount wei" onChange={onStakeChange} value={stakeWei} />
         <TextInput label="Hourly rate wei" onChange={onRateChange} value={hourlyRateWei} />
       </div>
-      <div className="mt-5 flex flex-wrap gap-3">
+      <div className="mt-5">
         <button
           className="rounded-2xl bg-[#00FF9D] px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400"
           disabled={busy || !canPair || !isBaseSepolia}
@@ -494,10 +659,16 @@ function StakeStep({
         >
           Stake on Base Sepolia
         </button>
-        <button className="rounded-2xl border border-zinc-700 px-5 py-3 text-sm text-zinc-300" onClick={onDemoContinue} type="button">
-          Continue demo setup
-        </button>
       </div>
+      {stakeReceipt ? (
+        <div className="mt-5 rounded-3xl border border-[#00FF9D]/20 bg-[#00FF9D]/5 p-4">
+          <TxReceiptCard label="Operator stake receipt" txHash={stakeReceipt.txHash} />
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <InfoTile label="Stake" value={`${stakeReceipt.stakeWei} wei`} />
+            <InfoTile label="Hourly rate" value={`${stakeReceipt.hourlyRateWei} wei/h`} />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -667,6 +838,156 @@ function LiveRigsSection({
   );
 }
 
+type OperatorRental = {
+  amountWei: number;
+  completionCount: number;
+  escrowId: number;
+  expiresAt: string;
+  model: string;
+  operatorPayoutWei: number;
+  rentalId: string;
+  rigIdentity: string;
+  rigName: string;
+  status: "allocated" | "terminated" | "expired";
+  totalTokens: number;
+};
+
+function OperatorSettlementQueue({
+  busy,
+  onRelease,
+  rentals,
+}: Readonly<{ busy: boolean; onRelease: (escrowId: number) => void; rentals: OperatorRental[] }>) {
+  const settlementRentals = rentals.filter((rental) => rental.status === "allocated" || rental.status === "expired");
+
+  return (
+    <section className="rounded-4xl border border-zinc-800 bg-zinc-950/75 p-5">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">Settlement queue</p>
+          <h2 className="mt-2 text-2xl font-semibold text-white">Release escrowed rental hours</h2>
+          <p className="mt-2 text-sm text-zinc-400">Release moves due escrow into claimable balances: 90% operator, 10% treasury.</p>
+        </div>
+        <span className="rounded-full border border-[#00FF9D]/30 px-3 py-1 text-xs text-[#00FF9D]">{settlementRentals.length} escrows</span>
+      </div>
+
+      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {settlementRentals.length > 0 ? (
+          settlementRentals.map((rental) => (
+            <SettlementRentalCard busy={busy} key={rental.rentalId} onRelease={onRelease} rental={rental} />
+          ))
+        ) : (
+          <div className="rounded-3xl border border-dashed border-zinc-800 bg-black/30 p-5 text-sm text-zinc-500">
+            No rental escrows are waiting for release.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SettlementRentalCard({
+  busy,
+  onRelease,
+  rental,
+}: Readonly<{ busy: boolean; onRelease: (escrowId: number) => void; rental: OperatorRental }>) {
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
+  const { data: escrow } = useReadContract({
+    address: registryAddress as `0x${string}`,
+    abi: registryAbi,
+    functionName: "escrows",
+    args: [BigInt(rental.escrowId)],
+    query: {
+      refetchInterval: 15_000,
+    },
+  });
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowSeconds(Math.floor(Date.now() / 1000)), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const escrowState = parseEscrowState(escrow);
+  const nextReleaseAt = escrowState ? escrowState.lastReleaseAt + 3600 : null;
+  const secondsUntilDue = nextReleaseAt ? Math.max(0, nextReleaseAt - nowSeconds) : 0;
+  const fullyReleased = Boolean(escrowState && escrowState.releasedHours >= escrowState.durationHours);
+  const canRelease = Boolean(escrowState && !escrowState.slashed && !fullyReleased && secondsUntilDue === 0);
+  const actionLabel = escrowState?.slashed
+    ? "Escrow slashed/refunded"
+    : fullyReleased
+      ? "Fully released"
+      : canRelease
+        ? "Release due hour"
+        : "Payment not due yet";
+
+  return (
+    <article className="rounded-3xl border border-zinc-800 bg-black/50 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-white">{rental.rigName}</p>
+          <p className="mt-1 break-all font-mono text-xs text-zinc-500">{rental.rigIdentity}</p>
+        </div>
+        <span className="rounded-full border border-amber-300/40 bg-amber-300/10 px-3 py-1 text-xs uppercase tracking-[0.16em] text-amber-200">
+          {rental.status}
+        </span>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <InfoTile label="Escrow" value={`#${rental.escrowId}`} />
+        <InfoTile label="Tokens" value={rental.totalTokens.toString()} />
+        <InfoTile label="Released" value={escrowState ? `${escrowState.releasedHours}/${escrowState.durationHours} h` : "Loading"} />
+        <InfoTile label="Remaining" value={escrowState ? `${escrowState.remainingWei} wei` : "Loading"} />
+        <InfoTile label="Operator 90%" value={`${rental.operatorPayoutWei || Math.floor(rental.amountWei * 0.9)} wei`} />
+        <InfoTile label="Treasury 10%" value={`${Math.max(0, rental.amountWei - (rental.operatorPayoutWei || Math.floor(rental.amountWei * 0.9)))} wei`} />
+      </div>
+      {!canRelease && !fullyReleased && !escrowState?.slashed ? (
+        <p className="mt-3 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-3 text-xs text-zinc-400">
+          Due in {formatDuration(secondsUntilDue)}
+        </p>
+      ) : null}
+      <button
+        className="mt-4 rounded-2xl bg-[#00FF9D] px-4 py-3 font-mono text-xs font-bold uppercase tracking-[0.14em] text-black disabled:bg-zinc-700 disabled:text-zinc-400"
+        disabled={busy || !canRelease}
+        onClick={() => onRelease(rental.escrowId)}
+        type="button"
+      >
+        {actionLabel}
+      </button>
+    </article>
+  );
+}
+
+type EscrowState = {
+  durationHours: number;
+  lastReleaseAt: number;
+  releasedHours: number;
+  remainingWei: string;
+  slashed: boolean;
+};
+
+function parseEscrowState(escrow: unknown): EscrowState | null {
+  if (!Array.isArray(escrow)) {
+    return null;
+  }
+  return {
+    durationHours: Number(escrow[5] ?? 0n),
+    lastReleaseAt: Number(escrow[4] ?? 0n),
+    releasedHours: Number(escrow[6] ?? 0n),
+    remainingWei: (escrow[7] ?? 0n).toString(),
+    slashed: Boolean(escrow[8]),
+  };
+}
+
+function formatDuration(totalSeconds: number): string {
+  if (totalSeconds <= 0) {
+    return "0m";
+  }
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.ceil((totalSeconds % 3600) / 60);
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
+}
+
 function RigCard({
   busy,
   onDelete,
@@ -708,29 +1029,60 @@ function RigCard({
 }
 
 function RigDetailsPanel({ onClose, rig }: Readonly<{ onClose: () => void; rig: OperatorRig }>) {
+  const escrowId = getAssignmentEscrowId(rig);
+  const treasuryFeeWei = Math.floor(rig.expected_earnings_wei / 9);
   return (
-    <section className="rounded-4xl border border-[#00FF9D]/20 bg-zinc-950/80 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.35em] text-[#00FF9D]">Rig details</p>
-          <h2 className="mt-2 text-2xl font-semibold text-white">{rig.ens_name || rig.rig_identity}</h2>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur">
+      <section className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-4xl border border-[#00FF9D]/20 bg-zinc-950 p-5 shadow-[0_0_80px_rgba(0,255,157,0.16)]">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.35em] text-[#00FF9D]">Rig details</p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">{rig.ens_name || rig.rig_identity}</h2>
+          </div>
+          <button className="rounded-2xl border border-zinc-700 px-4 py-2 text-sm text-zinc-300" onClick={onClose} type="button">
+            Close
+          </button>
         </div>
-        <button className="rounded-2xl border border-zinc-700 px-4 py-2 text-sm text-zinc-300" onClick={onClose} type="button">
-          Close
-        </button>
+        <div className="mt-5 grid gap-3 md:grid-cols-4">
+          <InfoTile label="Status" value={rig.status} />
+          <InfoTile label="Model" value={rig.model} />
+          <InfoTile label="Load" value={`${Math.round(rig.current_load * 100)}%`} />
+          <InfoTile label="Last beat" value={formatTime(rig.last_heartbeat_at)} />
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <InfoTile label="Escrow" value={escrowId ? `#${escrowId}` : "None"} />
+          <InfoTile label="Expected payout" value={`${rig.expected_earnings_wei} wei`} />
+          <InfoTile label="Treasury fee" value={`${treasuryFeeWei} wei`} />
+          <InfoTile label="Settlement" value={escrowId ? "Managed in settlement queue" : "No active rental"} />
+        </div>
+        <div className="mt-4 rounded-3xl border border-zinc-800 bg-black/40 p-4 text-sm leading-6 text-zinc-400">
+          <p>Assignment: {rig.assignment ? JSON.stringify(rig.assignment) : "No active buyer assignment"}</p>
+          <p>Expected earnings: {rig.expected_earnings_wei} wei</p>
+          <p>Device fingerprint: {rig.device_fingerprint}</p>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function TxReceiptCard({ label, txHash }: Readonly<{ label: string; txHash: string }>) {
+  return (
+    <div className="mt-4 rounded-3xl border border-[#00FF9D]/20 bg-[#00FF9D]/5 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-[#00FF9D]">{label}</p>
+          <p className="mt-2 break-all font-mono text-xs text-zinc-400">{txHash}</p>
+        </div>
+        <a
+          className="rounded-2xl border border-[#00FF9D]/40 px-4 py-2 font-mono text-xs font-bold uppercase tracking-[0.14em] text-[#00FF9D] transition hover:bg-[#00FF9D]/10"
+          href={baseSepoliaTxUrl(txHash)}
+          rel="noreferrer"
+          target="_blank"
+        >
+          View on BaseScan
+        </a>
       </div>
-      <div className="mt-5 grid gap-3 md:grid-cols-4">
-        <InfoTile label="Status" value={rig.status} />
-        <InfoTile label="Model" value={rig.model} />
-        <InfoTile label="Load" value={`${Math.round(rig.current_load * 100)}%`} />
-        <InfoTile label="Last beat" value={formatTime(rig.last_heartbeat_at)} />
-      </div>
-      <div className="mt-4 rounded-3xl border border-zinc-800 bg-black/40 p-4 text-sm leading-6 text-zinc-400">
-        <p>Assignment: {rig.assignment ? JSON.stringify(rig.assignment) : "No active buyer assignment"}</p>
-        <p>Expected earnings: {rig.expected_earnings_wei} wei</p>
-        <p>Device fingerprint: {rig.device_fingerprint}</p>
-      </div>
-    </section>
+    </div>
   );
 }
 
@@ -777,4 +1129,31 @@ function formatTime(value: string): string {
 function normalizeAddress(value: string): `0x${string}` | undefined {
   const trimmed = value.trim();
   return /^0x[a-fA-F0-9]{40}$/.test(trimmed) ? (trimmed.toLowerCase() as `0x${string}`) : undefined;
+}
+
+function getAssignmentEscrowId(rig: OperatorRig): number | null {
+  const escrowId = rig.assignment?.escrow_id;
+  if (typeof escrowId === "number" && escrowId > 0) {
+    return escrowId;
+  }
+  if (typeof escrowId === "string" && Number(escrowId) > 0) {
+    return Number(escrowId);
+  }
+  return null;
+}
+
+function toOperatorRental(payload: BuyerRentalResponse): OperatorRental {
+  return {
+    amountWei: payload.amount_wei,
+    completionCount: payload.completion_count ?? 0,
+    escrowId: payload.escrow_id,
+    expiresAt: payload.expires_at,
+    model: payload.model,
+    operatorPayoutWei: payload.operator_payout_wei,
+    rentalId: payload.rental_id,
+    rigIdentity: payload.rig_identity,
+    rigName: payload.rig_name,
+    status: payload.status,
+    totalTokens: payload.total_tokens ?? 0,
+  };
 }

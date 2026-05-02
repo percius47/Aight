@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .dummy_operator import dummy_router
 from .router import router
+from .settlement_keeper import settlement_keeper
 from .settings import settings
 
 
@@ -20,3 +21,13 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(dummy_router)
+
+
+@app.on_event("startup")
+async def start_settlement_keeper() -> None:
+    settlement_keeper.start()
+
+
+@app.on_event("shutdown")
+async def stop_settlement_keeper() -> None:
+    await settlement_keeper.stop()

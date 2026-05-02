@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     base_sepolia_rpc_url: str = "https://sepolia.base.org"
     allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     state_path: str | None = None
+    settlement_keeper_enabled: bool = False
+    settlement_keeper_private_key: str | None = None
+    settlement_keeper_interval_seconds: int = 60
 
     @property
     def cors_origins(self) -> list[str]:
