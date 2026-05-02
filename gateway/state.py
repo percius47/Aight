@@ -182,6 +182,7 @@ class GatewayState:
         if normalized_operator not in self._operators:
             raise KeyError("operator not registered")
 
+        self._expire_allocated_rentals()
         rig = self._select_rig_for_rental(
             operator_address=normalized_operator,
             rig_id=payload.rig_id,
@@ -283,6 +284,7 @@ class GatewayState:
 
     def create_demo_escrow(self, payload: DemoEscrowRequest) -> DemoEscrowResponse:
         operator = self.get_operator(payload.operator_address)
+        self._expire_allocated_rentals()
         escrow_id = self._next_demo_escrow_id
         self._next_demo_escrow_id += 1
         assigned_rig: RigRecord | None = None
@@ -316,6 +318,7 @@ class GatewayState:
         rig_id: str | None = None,
         escrow_id: int | None = None,
     ) -> RigRecord | None:
+        self._expire_allocated_rentals()
         if rig_id is not None:
             rig = self._rigs.get(rig_id)
             if rig is None or rig.operator_address != operator_address:
@@ -501,6 +504,7 @@ class GatewayState:
         self._persist()
 
     def list_rigs(self, operator_address: str | None = None) -> list[RigStatusResponse]:
+        self._expire_allocated_rentals()
         normalized_operator = operator_address.lower() if operator_address else None
         rigs = [
             record
@@ -515,6 +519,7 @@ class GatewayState:
         buyer_username: str | None = None,
         buyer_address: str | None = None,
     ) -> list[BuyerRentalResponse]:
+        self._expire_allocated_rentals()
         normalized_address = buyer_address.lower() if buyer_address else None
         rentals = [
             record
@@ -534,6 +539,7 @@ class GatewayState:
         buyer_username: str | None = None,
         buyer_address: str | None = None,
     ) -> None:
+        self._expire_allocated_rentals()
         rental = self._rentals.get(rental_id)
         if rental is None:
             raise KeyError("rental not found")
@@ -577,7 +583,50 @@ class GatewayState:
             rental.refund_wei = max(0, rental.amount_wei - consumed_wei)
             rental.slash_wei = max(1, rental.amount_wei // 10) if rental.refund_wei > 0 else 0
 
+    def _expire_allocated_rentals(self, now: datetime | None = None) -> bool:
+        checked_at = now or datetime.now(UTC)
+        expired_any = False
+        for rental in self._rentals.values():
+            if rental.status != "allocated" or rental.expires_at > checked_at:
+                continue
+
+            api_key = self._api_keys.get(rental.api_key)
+            if api_key is not None:
+                api_key.active = False
+
+            rental.status = "expired"
+            rental.used_hours = rental.duration_hours
+            rental.refund_wei = 0
+            rental.operator_payout_wei = int(rental.amount_wei * 0.9)
+            rental.slash_wei = 0
+
+            if rental.rig_id is None:
+                expired_any = True
+                continue
+
+            rig = self._rigs.get(rental.rig_id)
+            if rig is not None and self._rig_assignment_matches_rental(rig, rental):
+                rig.assignment = None
+                rig.expected_earnings_wei = 0
+                if rig.status not in ("halted", "offline", "error"):
+                    rig.status = "idle"
+            expired_any = True
+
+        if expired_any:
+            self._persist()
+        return expired_any
+
+    @staticmethod
+    def _rig_assignment_matches_rental(rig: RigRecord, rental: RentalRecord) -> bool:
+        if rig.assignment is None:
+            return False
+        return (
+            int(rig.assignment.get("escrow_id", 0)) == rental.escrow_id
+            and str(rig.assignment.get("buyer_address", "")).lower() == rental.buyer_address
+        )
+
     def validate_api_key(self, secret: str) -> ApiKeyRecord:
+        self._expire_allocated_rentals()
         record = self._api_keys.get(secret)
         if record is None or not record.active or record.expires_at <= datetime.now(UTC):
             raise PermissionError("invalid or expired AIGHT_API_KEY")

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono } from "next/font/google";
 
+import { AppTopbar } from "@/components/app-topbar";
+
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -11,15 +13,21 @@ const mono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Aight Pulse",
+  title: "AIGHT",
   description: "Live dashboard for decentralized local LLM inference.",
+  icons: {
+    icon: "/icon.png",
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${mono.variable} min-h-screen bg-[#0A0A0A] font-mono text-zinc-100 antialiased`}>
-        <Providers>{children}</Providers>
+        <Providers>
+          <AppTopbar />
+          {children}
+        </Providers>
       </body>
     </html>
   );

@@ -11,7 +11,7 @@ import { WagmiProvider } from "wagmi";
 import { walletConnectProjectId } from "@/lib/config";
 
 const wagmiConfig = getDefaultConfig({
-  appName: "Aight",
+  appName: "AIGHT",
   projectId: walletConnectProjectId || "aight-local",
   chains: [baseSepolia],
   ssr: true,

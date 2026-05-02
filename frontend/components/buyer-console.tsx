@@ -1,10 +1,9 @@
 "use client";
 
-import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { parseEventLogs } from "viem";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAccount, useChainId, usePublicClient, useWriteContract } from "wagmi";
+import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 
 import { useAightAccount } from "@/hooks/use-aight-account";
 import { gatewayUrl, registryAddress } from "@/lib/config";
@@ -34,12 +33,10 @@ const registryAbi = [
   },
 ] as const;
 
-const baseSepoliaChainId = 84532;
 type PurchaseMode = "demo" | "onchain";
 
 export function BuyerConsole() {
   const { address } = useAccount();
-  const chainId = useChainId();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
   const { token } = useAightAccount();
@@ -55,9 +52,9 @@ export function BuyerConsole() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingPurchaseMode, setPendingPurchaseMode] = useState<PurchaseMode | null>(null);
+  const [testingToolsOpen, setTestingToolsOpen] = useState(false);
 
   const buyerAddress = address ?? normalizeAddress(demoWalletAddress);
-  const isBaseSepolia = chainId === baseSepoliaChainId;
   const walletReady = Boolean(buyerAddress);
 
   async function loadRigs(): Promise<void> {
@@ -299,12 +296,11 @@ export function BuyerConsole() {
 
   return (
     <div className="grid gap-6">
-      <BuyerWalletConsole
-        buyerAddress={buyerAddress}
-        chainId={chainId}
+      <BuyerTestingTools
         demoWalletAddress={demoWalletAddress}
-        isBaseSepolia={isBaseSepolia}
+        isOpen={testingToolsOpen}
         onDemoWalletChange={setDemoWalletAddress}
+        onToggle={() => setTestingToolsOpen((current) => !current)}
         walletConnected={Boolean(address)}
       />
 
@@ -415,53 +411,60 @@ export function BuyerConsole() {
   );
 }
 
-function BuyerWalletConsole({
-  buyerAddress,
-  chainId,
+function BuyerTestingTools({
   demoWalletAddress,
-  isBaseSepolia,
+  isOpen,
   onDemoWalletChange,
+  onToggle,
   walletConnected,
 }: Readonly<{
-  buyerAddress: string | undefined;
-  chainId: number;
   demoWalletAddress: string;
-  isBaseSepolia: boolean;
+  isOpen: boolean;
   onDemoWalletChange: (value: string) => void;
+  onToggle: () => void;
   walletConnected: boolean;
 }>) {
+  const [isLocalhost, setIsLocalhost] = useState(false);
+
+  useEffect(() => {
+    const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+    setIsLocalhost(localHosts.has(window.location.hostname));
+  }, []);
+
+  if (!isLocalhost) {
+    return null;
+  }
+
   return (
-    <section className="rounded-4xl border border-cyan-400/20 bg-zinc-950/80 p-5 shadow-[0_0_60px_rgba(0,120,255,0.08)]">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.35em] text-cyan-300">Buyer Console</p>
-          <h1 className="mt-2 text-2xl font-semibold text-white">Connect and rent live inference</h1>
-          <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-400">
-            Connect a buyer wallet first, or paste a local demo address for Cursor browser testing.
+    <section className="flex justify-end">
+      <div className="w-full max-w-2xl rounded-3xl border border-zinc-800 bg-black/35 p-3">
+        <button
+          className="flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left font-mono text-xs font-bold uppercase tracking-[0.16em] text-zinc-400 transition hover:text-cyan-200"
+          onClick={onToggle}
+          type="button"
+        >
+          <span>Testing tools</span>
+          <span>{isOpen ? "Hide" : "Show"}</span>
+        </button>
+
+        {isOpen && !walletConnected ? (
+          <label className="mt-3 grid gap-2 px-3 pb-3 text-xs uppercase tracking-[0.22em] text-zinc-500">
+            Demo wallet override
+            <input
+              className="rounded-2xl border border-zinc-800 bg-black/50 px-4 py-3 text-sm normal-case tracking-normal text-zinc-100 outline-none focus:border-cyan-300/60"
+              onChange={(event) => onDemoWalletChange(event.target.value)}
+              placeholder="Paste buyer public address if MetaMask does not connect"
+              value={demoWalletAddress}
+            />
+          </label>
+        ) : null}
+
+        {isOpen && walletConnected ? (
+          <p className="px-3 pb-3 text-xs leading-5 text-zinc-500">
+            Demo wallet override is hidden while a real wallet is connected.
           </p>
-        </div>
-        <div className="[&_button]:rounded-2xl! [&_button]:bg-cyan-300! [&_button]:px-4! [&_button]:py-3! [&_button]:font-mono! [&_button]:text-sm! [&_button]:font-bold! [&_button]:uppercase! [&_button]:tracking-[0.16em]! [&_button]:text-black!">
-          <ConnectButton chainStatus="icon" showBalance={false} />
-        </div>
+        ) : null}
       </div>
-
-      <div className="mt-5 grid gap-3 md:grid-cols-3">
-        <Metric label="Wallet" value={buyerAddress ?? "Not connected"} />
-        <Metric label="Network" value={isBaseSepolia ? "Base Sepolia ready" : `Chain ${chainId || "disconnected"}`} />
-        <Metric label="Registry" value={registryAddress} />
-      </div>
-
-      {!walletConnected ? (
-        <label className="mt-5 grid gap-2 text-xs uppercase tracking-[0.22em] text-zinc-500">
-          Demo wallet override
-          <input
-            className="rounded-2xl border border-zinc-800 bg-black/50 px-4 py-3 text-sm normal-case tracking-normal text-zinc-100 outline-none focus:border-cyan-300/60"
-            onChange={(event) => onDemoWalletChange(event.target.value)}
-            placeholder="Paste buyer public address if MetaMask does not connect"
-            value={demoWalletAddress}
-          />
-        </label>
-      ) : null}
     </section>
   );
 }
@@ -617,17 +620,23 @@ function RentedRigsSection({
   return (
     <section className="rounded-4xl border border-zinc-800 bg-zinc-950/75 p-5">
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">Your rentals</p>
+        <p className="mt-2 text-2xl font-semibold text-white">Your rentals</p>
         <span className="rounded-full border border-cyan-300/30 px-3 py-1 text-xs text-cyan-200">
-          {rentals.filter((rental) => rental.status === "allocated").length} allocated
+          {rentals.filter((rental) => rental.status === "allocated").length}{" "}
+          allocated
         </span>
       </div>
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         {rentals.length > 0 ? (
           rentals.map((rental) => (
-            <article className="rounded-3xl border border-zinc-800 bg-black/50 p-4" key={`${rental.escrowId}-${rental.apiKey}`}>
+            <article
+              className="rounded-3xl border border-zinc-800 bg-black/50 p-4"
+              key={`${rental.escrowId}-${rental.apiKey}`}
+            >
               <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-semibold text-white">{rental.rigName}</p>
+                <p className="text-sm font-semibold text-white">
+                  {rental.rigName}
+                </p>
                 {rental.status !== "allocated" ? (
                   <IconButton
                     disabled={busy}
@@ -640,8 +649,12 @@ function RentedRigsSection({
                 ) : null}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <p className="break-all font-mono text-xs text-zinc-500">{rental.rigIdentity}</p>
-                <span className={`rounded-full border px-3 py-1 text-xs uppercase tracking-[0.16em] ${rentalStatusStyle(rental.status)}`}>
+                <p className="break-all font-mono text-xs text-zinc-500">
+                  {rental.rigIdentity}
+                </p>
+                <span
+                  className={`rounded-full border px-3 py-1 text-xs uppercase tracking-[0.16em] ${rentalStatusStyle(rental.status)}`}
+                >
                   {rentalStatusLabel(rental.status)}
                 </span>
               </div>
@@ -654,7 +667,10 @@ function RentedRigsSection({
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <Metric label="Used" value={`${rental.usedHours} h`} />
                   <Metric label="Refund" value={`${rental.refundWei} wei`} />
-                  <Metric label="Operator payout" value={`${rental.operatorPayoutWei} wei`} />
+                  <Metric
+                    label="Operator payout"
+                    value={`${rental.operatorPayoutWei} wei`}
+                  />
                   <Metric label="Slash" value={`${rental.slashWei} wei`} />
                 </div>
               ) : null}
@@ -664,16 +680,22 @@ function RentedRigsSection({
                 </p>
               ) : null}
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <p className={`min-w-0 flex-1 break-all rounded-2xl border p-3 font-mono text-xs ${
-                  rental.status === "allocated"
-                    ? "border-[#00FF9D]/20 bg-[#00FF9D]/5 text-[#00FF9D]"
-                    : "border-zinc-700 bg-zinc-900/60 text-zinc-500"
-                }`}>
+                <p
+                  className={`min-w-0 flex-1 break-all rounded-2xl border p-3 font-mono text-xs ${
+                    rental.status === "allocated"
+                      ? "border-[#00FF9D]/20 bg-[#00FF9D]/5 text-[#00FF9D]"
+                      : "border-zinc-700 bg-zinc-900/60 text-zinc-500"
+                  }`}
+                >
                   {rental.apiKey}
                 </p>
                 <IconButton
                   active={copiedKey === rental.apiKey}
-                  label={copiedKey === rental.apiKey ? "API key copied" : "Copy API key"}
+                  label={
+                    copiedKey === rental.apiKey
+                      ? "API key copied"
+                      : "Copy API key"
+                  }
                   onClick={() => onCopy(rental.apiKey)}
                   tone="copy"
                 >
@@ -681,7 +703,9 @@ function RentedRigsSection({
                 </IconButton>
               </div>
               {rental.status !== "allocated" ? (
-                <p className="mt-2 text-xs text-zinc-500">This key is invalid and will not route inference.</p>
+                <p className="mt-2 text-xs text-zinc-500">
+                  This key is invalid and will not route inference.
+                </p>
               ) : null}
             </article>
           ))

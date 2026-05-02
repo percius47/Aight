@@ -1,6 +1,5 @@
 "use client";
 
-import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { keccak256, toBytes } from "viem";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAccount, useChainId, useWriteContract } from "wagmi";
@@ -11,6 +10,13 @@ import type { OperatorRig, PairingCode, RigStatus } from "@/lib/types";
 const baseSepoliaChainId = 84532;
 const supportedModels = ["gemma3:1b", "llama3", "llama3.2", "mistral", "deepseek-coder"];
 const modalSteps = ["Stake", "Model", "Pair", "Command", "Confirm"];
+const commandChecklist = [
+  "Downloads and runs the AIGHT rig installer for this operating system.",
+  "Checks that Ollama is reachable locally and can serve the selected model.",
+  "Starts a Cloudflare Quick Tunnel so the gateway can route buyer requests to this rig.",
+  "Claims the one-time pairing code and registers this device fingerprint with your operator wallet.",
+  "Starts the heartbeat loop that keeps the rig listed as available while it is online and idle.",
+];
 
 const registryAbi = [
   {
@@ -51,6 +57,7 @@ export function OperatorRigConsole() {
   const [hourlyRateWei, setHourlyRateWei] = useState("1000");
   const [pairingCode, setPairingCode] = useState<PairingCode | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const [hasCopiedInstallerCommand, setHasCopiedInstallerCommand] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -97,6 +104,8 @@ export function OperatorRigConsole() {
     setError(null);
     setStep(0);
     setPairingCode(null);
+    setCopiedCommand(null);
+    setHasCopiedInstallerCommand(false);
     setModalOpen(true);
   }
 
@@ -213,6 +222,7 @@ export function OperatorRigConsole() {
   async function copyCommand(label: string, command: string): Promise<void> {
     await navigator.clipboard.writeText(command);
     setCopiedCommand(label);
+    setHasCopiedInstallerCommand(true);
     window.setTimeout(() => setCopiedCommand(null), 1600);
   }
 
@@ -247,6 +257,7 @@ export function OperatorRigConsole() {
           commands={commands}
           copiedCommand={copiedCommand}
           error={error}
+          hasCopiedInstallerCommand={hasCopiedInstallerCommand}
           hourlyRateWei={hourlyRateWei}
           isBaseSepolia={isBaseSepolia}
           model={model}
@@ -298,9 +309,6 @@ function OperatorNavbar({
             Connect your operator wallet first, then pair rigs through a step-by-step installer flow.
           </p>
         </div>
-        <div className="[&_button]:rounded-2xl! [&_button]:bg-[#00FF9D]! [&_button]:px-4! [&_button]:py-3! [&_button]:font-mono! [&_button]:text-sm! [&_button]:font-bold! [&_button]:uppercase! [&_button]:tracking-[0.16em]! [&_button]:text-black!">
-          <ConnectButton chainStatus="icon" showBalance={false} />
-        </div>
       </div>
 
       <div className="mt-5 grid gap-3 md:grid-cols-3">
@@ -339,6 +347,7 @@ function PairRigModal({
   commands,
   copiedCommand,
   error,
+  hasCopiedInstallerCommand,
   hourlyRateWei,
   isBaseSepolia,
   model,
@@ -361,6 +370,7 @@ function PairRigModal({
   commands: Record<"windows" | "mac" | "linux", string>;
   copiedCommand: string | null;
   error: string | null;
+  hasCopiedInstallerCommand: boolean;
   hourlyRateWei: string;
   isBaseSepolia: boolean;
   model: string;
@@ -380,7 +390,7 @@ function PairRigModal({
 }>) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur">
-      <section className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-4xl border border-[#00FF9D]/30 bg-zinc-950 p-5 shadow-[0_0_80px_rgba(0,255,157,0.16)]">
+      <section className="relative max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-4xl border border-[#00FF9D]/30 bg-zinc-950 p-5 shadow-[0_0_80px_rgba(0,255,157,0.16)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.35em] text-[#00FF9D]">Pair new rig</p>
@@ -393,16 +403,15 @@ function PairRigModal({
 
         <div className="mt-6 grid gap-3 md:grid-cols-5">
           {modalSteps.map((item, index) => (
-            <button
+            <div
+              aria-current={index === step ? "step" : undefined}
               className={`rounded-2xl border px-3 py-3 text-left text-xs uppercase tracking-[0.18em] ${
                 index === step ? "border-[#00FF9D]/50 bg-[#00FF9D]/10 text-[#00FF9D]" : "border-zinc-800 bg-black/40 text-zinc-500"
               }`}
               key={item}
-              onClick={() => onStepChange(index)}
-              type="button"
             >
               {index + 1}. {item}
-            </button>
+            </div>
           ))}
         </div>
 
@@ -427,7 +436,14 @@ function PairRigModal({
             <PairCodeStep busy={busy} onCreatePairingCode={onCreatePairingCode} pairingCode={pairingCode} />
           ) : null}
           {step === 3 ? (
-            <CommandStep commands={commands} copiedCommand={copiedCommand} onCopyCommand={onCopyCommand} pairingCode={pairingCode} />
+            <CommandStep
+              commands={commands}
+              copiedCommand={copiedCommand}
+              hasCopiedInstallerCommand={hasCopiedInstallerCommand}
+              onCopyCommand={onCopyCommand}
+              onNext={() => onStepChange(4)}
+              pairingCode={pairingCode}
+            />
           ) : null}
           {step === 4 ? <ConfirmStep onClose={onClose} pairingCode={pairingCode} /> : null}
         </div>
@@ -548,12 +564,16 @@ function PairCodeStep({ busy, onCreatePairingCode, pairingCode }: Readonly<{ bus
 function CommandStep({
   commands,
   copiedCommand,
+  hasCopiedInstallerCommand,
   onCopyCommand,
+  onNext,
   pairingCode,
 }: Readonly<{
   commands: Record<"windows" | "mac" | "linux", string>;
   copiedCommand: string | null;
+  hasCopiedInstallerCommand: boolean;
   onCopyCommand: (label: string, command: string) => void;
+  onNext: () => void;
   pairingCode: PairingCode | null;
 }>) {
   if (!pairingCode) {
@@ -562,12 +582,31 @@ function CommandStep({
   return (
     <div>
       <h3 className="text-xl font-semibold text-white">Step 4: Run command on rig</h3>
-      <p className="mt-2 text-sm leading-6 text-zinc-400">The bootstrapper verifies Ollama, opens a Cloudflare Quick Tunnel, claims this code, and starts heartbeat.</p>
+      <p className="mt-2 text-sm leading-6 text-zinc-400">
+        Run this on the machine you want to list. The command prepares the rig, verifies the local inference runtime, connects it to AIGHT, and keeps it discoverable while the terminal stays online.
+      </p>
+      <ul className="mt-4 grid gap-2 rounded-2xl border border-zinc-800 bg-black/35 p-4 text-sm leading-6 text-zinc-300">
+        {commandChecklist.map((item) => (
+          <li className="flex gap-3" key={item}>
+            <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#00FF9D]" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
       <div className="mt-5 grid gap-4">
         {Object.entries(commands).map(([label, command]) => (
           <CommandCard command={command} copied={copiedCommand === label} key={label} label={label} onCopy={() => onCopyCommand(label, command)} />
         ))}
       </div>
+      {hasCopiedInstallerCommand ? (
+        <button
+          className="sticky bottom-0 ml-auto mt-5 block rounded-2xl bg-[#00FF9D] px-5 py-3 font-mono text-sm font-bold uppercase tracking-[0.14em] text-black shadow-[0_0_34px_rgba(0,255,157,0.28)]"
+          onClick={onNext}
+          type="button"
+        >
+          Next: Confirm heartbeat
+        </button>
+      ) : null}
     </div>
   );
 }
